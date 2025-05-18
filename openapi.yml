@@ -105,6 +105,159 @@ components:
           example: Client added successfully
         data:
           $ref: '#/components/schemas/Client'
+    WireGuardStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            interface:
+              type: string
+              example: wg0
+            running:
+              type: boolean
+              example: true
+            status_output:
+              type: string
+              example: |-
+                interface: wg0
+                public key: aB3Cdf...
+                private key: (hidden)
+            interface_output:
+              type: string
+              example: |-
+                3: wg0: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1420 qdisc noqueue state UNKNOWN...
+            port_status:
+              type: object
+              properties:
+                port:
+                  type: string
+                  example: "51820"
+                listening:
+                  type: boolean
+                  example: true
+                details:
+                  type: string
+                  example: |-
+                    udp UNCONN 0 0 0.0.0.0:51820 0.0.0.0:* users:((wireguard,pid=1234,fd=5))
+            system_load:
+              type: string
+              example: "load average: 0.08, 0.03, 0.01"
+            peers:
+              type: array
+              items:
+                type: object
+                properties:
+                  client_name:
+                    type: string
+                    example: client1
+                  public_key:
+                    type: string
+                    example: dE5fG6h...
+                  preshared_key:
+                    type: string
+                    example: (hidden)
+                  endpoint:
+                    type: string
+                    example: 192.168.1.5:58765
+                  allowed_ips:
+                    type: string
+                    example: 10.66.66.2/32,fd42:42:42::2/128
+                  latest_handshake:
+                    type: string
+                    example: 1620000000
+                  transfer_rx:
+                    type: string
+                    example: 25460
+                  transfer_tx:
+                    type: string
+                    example: 12840
+            server_info:
+              type: object
+              properties:
+                public_ip:
+                  type: string
+                  example: vpn.example.com
+                port:
+                  type: string
+                  example: "51820"
+                public_key:
+                  type: string
+                  example: aB3Cdf...
+                host_info:
+                  type: string
+                  example: "Darwin admin-machine 22.4.0 Darwin Kernel Version 22.4.0..."
+            system:
+              type: object
+              properties:
+                kernel_module:
+                  type: string
+                  example: "wireguard 16384 0 - Live 0x0000000000000000"
+                service_status:
+                  type: string
+                  example: |-
+                    ● wg-quick@wg0.service - WireGuard via wg-quick(8) for wg0
+                wg_installed:
+                  type: boolean
+                  example: true
+                wg_quick_installed:
+                  type: boolean
+                  example: true
+                config_exists:
+                  type: boolean
+                  example: true
+                params_exists:
+                  type: boolean
+                  example: true
+                config_file:
+                  type: string
+                  example: "/etc/wireguard/wg0.conf"
+                params_file:
+                  type: string
+                  example: "/etc/wireguard/params"
+                clients_dir:
+                  type: string
+                  example: "/home/wireguard/users"
+            parameters:
+              type: object
+              description: "Only included when in debug mode"
+              properties:
+                ServerPubIP:
+                  type: string
+                  example: "vpn.example.com"
+                ServerPubNIC:
+                  type: string
+                  example: "eth0"
+                ServerWGNIC:
+                  type: string
+                  example: "wg0"
+                ServerWGIPv4:
+                  type: string
+                  example: "10.66.66.1"
+                ServerWGIPv6:
+                  type: string
+                  example: "fd42:42:42::1"
+                ServerPort:
+                  type: string
+                  example: "51820"
+                ServerPrivKey:
+                  type: string
+                  example: "(hidden)"
+                ServerPubKey:
+                  type: string
+                  example: "aB3Cdf..."
+                ClientDNS1:
+                  type: string
+                  example: "1.1.1.1"
+                ClientDNS2:
+                  type: string
+                  example: "1.0.0.1"
+                AllowedIPs:
+                  type: string
+                  example: "0.0.0.0/0,::/0"
 
 paths:
   /api/users:
@@ -213,6 +366,32 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Not Found - Client does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/wireguard-status:
+    get:
+      summary: Get WireGuard server status
+      description: Returns detailed information about the WireGuard server status, including connected peers, transfer statistics, and configuration details
+      operationId: getWireGuardStatus
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WireGuardStatusResponse'
+        '401':
+          description: Unauthorized - Invalid or missing API token
           content:
             application/json:
               schema:

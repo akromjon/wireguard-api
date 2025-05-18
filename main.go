@@ -157,10 +157,8 @@ func main() {
 	router.POST("/api/users/add", addUserHandlerGin)
 	router.POST("/api/users/delete", deleteUserHandlerGin)
 
-	// Debug route
-	if DEBUG_MODE {
-		router.GET("/api/debug/wireguard-status", debugWireGuardStatusHandlerGin)
-	}
+	// WireGuard status route
+	router.GET("/api/wireguard-status", wireGuardStatusHandlerGin)
 
 	// Start server
 	log.Printf("WireGuard API server running on port %s", API_PORT)
@@ -855,50 +853,167 @@ func syncWireGuardConf() error {
 	return nil
 }
 
-// Debug handler for WireGuard status
-func debugWireGuardStatusHandlerGin(c *gin.Context) {
+// WireGuard status handler - shows current status of the WireGuard server
+func wireGuardStatusHandlerGin(c *gin.Context) {
 	// Check WireGuard installed
-	wgInstalled, wgOutput := executeCommand("which", "wg")
-	wgQuickInstalled, wgQuickOutput := executeCommand("which", "wg-quick")
+	wgInstalled, _ := executeCommand("which", "wg")
+	wgQuickInstalled, _ := executeCommand("which", "wg-quick")
 	
-	// Check WireGuard configuration
-	configExists := fileExists(WG_CONFIG_FILE)
-	paramsExists := fileExists(WG_PARAMS_FILE)
+	// Get WireGuard status
+	statusSuccess, statusOutput := executeCommand("wg", "show", wgParams.ServerWGNIC)
 	
-	// Check WireGuard status if configuration exists
-	var wgStatus, wgStatusOutput string
-	if configExists {
-		wgStatus, wgStatusOutput = executeCommand("wg", "show")
+	// Get WireGuard statistics (transfer, handshakes, etc.)
+	statsSuccess, statsOutput := executeCommand("wg", "show", wgParams.ServerWGNIC, "dump")
+	
+	// Check if WireGuard interface is up - try ip command first, fall back to ifconfig
+	var interfaceOutput string
+	_, interfaceOutput = executeCommand("ip", "addr", "show", wgParams.ServerWGNIC)
+	if interfaceOutput == "" || strings.Contains(interfaceOutput, "Error") {
+		// Try ifconfig as fallback
+		_, interfaceOutput = executeCommand("ifconfig", wgParams.ServerWGNIC)
 	}
+	
+	// Get listening port status - try ss command first, fall back to netstat
+	var portSuccess, portOutput string
+	portSuccess, portOutput = executeCommand("ss", "-lnp", fmt.Sprintf("sport = %s", wgParams.ServerPort))
+	if portSuccess != "success" {
+		// Try netstat as fallback
+		portSuccess, portOutput = executeCommand("netstat", "-lnp", fmt.Sprintf("| grep %s", wgParams.ServerPort))
+	}
+	
+	// Get system load
+	_, loadOutput := executeCommand("uptime")
 	
 	// Get server information
 	hostInfo, _ := executeCommand("uname", "-a")
 	
-	// Prepare response
-	debugInfo := map[string]interface{}{
-		"wireguard": map[string]interface{}{
-			"wg_installed": wgInstalled,
-			"wg_output": wgOutput,
-			"wg_quick_installed": wgQuickInstalled,
-			"wg_quick_output": wgQuickOutput,
+	// Parse the statistics to get more structured data
+	var peers []map[string]interface{}
+	if statsSuccess == "success" && statsOutput != "" {
+		lines := strings.Split(statsOutput, "\n")
+		for _, line := range lines {
+			if line == "" {
+				continue
+			}
+			
+			fields := strings.Fields(line)
+			if len(fields) >= 5 {
+				peer := map[string]interface{}{
+					"public_key":       fields[0],
+					"preshared_key":    fields[1],
+					"endpoint":         fields[2],
+					"allowed_ips":      fields[3],
+					"latest_handshake": fields[4],
+				}
+				
+				if len(fields) >= 7 {
+					peer["transfer_rx"] = fields[5]
+					peer["transfer_tx"] = fields[6]
+				}
+				
+				peers = append(peers, peer)
+			}
+		}
+	}
+	
+	// Find client names for each peer
+	clientPeers := make([]map[string]interface{}, 0, len(peers))
+	for _, peer := range peers {
+		publicKey, ok := peer["public_key"].(string)
+		if !ok || publicKey == "" {
+			clientPeers = append(clientPeers, peer)
+			continue
+		}
+		
+		// Try to find the client name from config file
+		clientName := findClientNameByPublicKey(publicKey)
+		peerWithName := make(map[string]interface{})
+		for k, v := range peer {
+			peerWithName[k] = v
+		}
+		
+		if clientName != "" {
+			peerWithName["client_name"] = clientName
+		}
+		
+		clientPeers = append(clientPeers, peerWithName)
+	}
+	
+	// Get kernel module and service status
+	_, moduleOutput := executeCommand("lsmod", "| grep wireguard")
+	_, serviceOutput := executeCommand("systemctl", "status", "wg-quick@"+wgParams.ServerWGNIC)
+	
+	// Check WireGuard configuration files
+	configExists := fileExists(WG_CONFIG_FILE)
+	paramsExists := fileExists(WG_PARAMS_FILE)
+	
+	// Prepare the response data
+	statusData := map[string]interface{}{
+		"interface": wgParams.ServerWGNIC,
+		"running": statusSuccess == "success",
+		"status_output": statusOutput,
+		"interface_output": interfaceOutput,
+		"port_status": map[string]interface{}{
+			"port": wgParams.ServerPort,
+			"listening": portSuccess == "success" && strings.Contains(portOutput, wgParams.ServerPort),
+			"details": portOutput,
+		},
+		"system_load": loadOutput,
+		"peers": clientPeers,
+		"server_info": map[string]interface{}{
+			"public_ip": wgParams.ServerPubIP,
+			"port": wgParams.ServerPort,
+			"public_key": wgParams.ServerPubKey,
+			"host_info": hostInfo,
+		},
+		"system": map[string]interface{}{
+			"kernel_module": moduleOutput,
+			"service_status": serviceOutput,
+			"wg_installed": wgInstalled == "success",
+			"wg_quick_installed": wgQuickInstalled == "success",
 			"config_exists": configExists,
 			"params_exists": paramsExists,
-			"wg_running": wgStatus == "success",
-			"wg_status_output": wgStatusOutput,
-		},
-		"server": map[string]interface{}{
-			"host_info": hostInfo,
 			"config_file": WG_CONFIG_FILE,
 			"params_file": WG_PARAMS_FILE,
-			"clients_dir": WIREGUARD_CLIENTS,
+			"clients_dir": WIREGUARD_CLIENTS, 
 		},
-		"parameters": wgParams,
+	}
+	
+	// If in debug mode, include full configuration parameters
+	if DEBUG_MODE {
+		statusData["parameters"] = wgParams
 	}
 	
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
-		Data: debugInfo,
+		Data: statusData,
 	})
+}
+
+// Find client name by public key
+func findClientNameByPublicKey(publicKey string) string {
+	// Read the WireGuard config file
+	content, err := os.ReadFile(WG_CONFIG_FILE)
+	if err != nil {
+		if DEBUG_MODE {
+			log.Printf("Failed to read WireGuard config: %v", err)
+		}
+		return ""
+	}
+	
+	// Find client sections with their public keys
+	clientSectionRegex := regexp.MustCompile(`(?m)^### Client (.+)$\s*\[Peer\]\s*PublicKey = (.+)$`)
+	matches := clientSectionRegex.FindAllSubmatch(content, -1)
+	
+	for _, match := range matches {
+		if len(match) >= 3 {
+			if string(match[2]) == publicKey {
+				return string(match[1])
+			}
+		}
+	}
+	
+	return ""
 }
 
 // Helper function to execute a command and return if it succeeded and the output
