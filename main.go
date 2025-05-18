@@ -435,13 +435,24 @@ func getNextAvailableIPv6() (string, error) {
 
 // Check if a client with the given name exists
 func clientExists(name string) (bool, error) {
+	// First check the config file for the client entry
 	content, err := ioutil.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return false, fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
 	
 	clientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(name) + `$`)
-	return clientRegex.Match(content), nil
+	if clientRegex.Match(content) {
+		return true, nil
+	}
+	
+	// Also check if a client config file exists
+	configPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
+	if fileExists(configPath) {
+		return true, nil
+	}
+	
+	return false, nil
 }
 
 // List all WireGuard clients
@@ -484,6 +495,12 @@ func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create clients directory: %v", err)
 	}
+	
+	// Check if client config file already exists
+	configPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
+	if fileExists(configPath) {
+		return "", fmt.Errorf("client configuration file already exists at %s", configPath)
+	}
 
 	// Generate key pair for the client
 	privateKey, err := generatePrivateKey()
@@ -525,7 +542,6 @@ AllowedIPs = %s
 	   wgParams.ServerPubKey, preSharedKey, endpoint, wgParams.AllowedIPs)
 
 	// Write client config to file
-	configPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
 	err = ioutil.WriteFile(configPath, []byte(clientConfig), 0600)
 	if err != nil {
 		return "", fmt.Errorf("failed to write client config: %v", err)
