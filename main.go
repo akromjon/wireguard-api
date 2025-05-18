@@ -159,6 +159,11 @@ func main() {
 
 	// WireGuard status route
 	router.GET("/api/wireguard-status", wireGuardStatusHandlerGin)
+	
+	// WireGuard control routes
+	router.POST("/api/wireguard/start", wireGuardStartHandlerGin)
+	router.POST("/api/wireguard/stop", wireGuardStopHandlerGin)
+	router.POST("/api/wireguard/restart", wireGuardRestartHandlerGin)
 
 	// Start server
 	log.Printf("WireGuard API server running on port %s", API_PORT)
@@ -1031,4 +1036,86 @@ func executeCommand(command string, args ...string) (string, string) {
 	}
 	
 	return "success", output
+}
+
+// WireGuard start handler
+func wireGuardStartHandlerGin(c *gin.Context) {
+	// Use systemctl to start the service
+	success, output := executeCommand("systemctl", "start", "wg-quick@"+wgParams.ServerWGNIC)
+	
+	if success != "success" {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "Failed to start WireGuard service",
+			Data:    output,
+		})
+		return
+	}
+	
+	// Check if the service is now running
+	success, _ = executeCommand("systemctl", "is-active", "wg-quick@"+wgParams.ServerWGNIC)
+	if success != "success" {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "WireGuard service failed to start properly",
+			Data:    output,
+		})
+		return
+	}
+	
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: "WireGuard service started successfully",
+	})
+}
+
+// WireGuard stop handler
+func wireGuardStopHandlerGin(c *gin.Context) {
+	// Use systemctl to stop the service
+	success, output := executeCommand("systemctl", "stop", "wg-quick@"+wgParams.ServerWGNIC)
+	
+	if success != "success" {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "Failed to stop WireGuard service",
+			Data:    output,
+		})
+		return
+	}
+	
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: "WireGuard service stopped successfully",
+	})
+}
+
+// WireGuard restart handler
+func wireGuardRestartHandlerGin(c *gin.Context) {
+	// Use systemctl to restart the service
+	success, output := executeCommand("systemctl", "restart", "wg-quick@"+wgParams.ServerWGNIC)
+	
+	if success != "success" {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "Failed to restart WireGuard service",
+			Data:    output,
+		})
+		return
+	}
+	
+	// Check if the service is now running
+	success, _ = executeCommand("systemctl", "is-active", "wg-quick@"+wgParams.ServerWGNIC)
+	if success != "success" {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "WireGuard service failed to restart properly",
+			Data:    output,
+		})
+		return
+	}
+	
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: "WireGuard service restarted successfully",
+	})
 }
