@@ -457,14 +457,39 @@ func clientExists(name string) (bool, error) {
 		return false, fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
 	
-	clientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(name) + `$`)
-	if clientRegex.Match(content) {
+	// Check for exact name match
+	exactClientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(name) + `$`)
+	if exactClientRegex.Match(content) {
 		return true, nil
 	}
 	
-	// Also check if a client config file exists
-	configPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
-	if fileExists(configPath) {
+	// Check for prefixed match with wg0-client- prefix
+	prefixedName := "wg0-client-" + name
+	prefixedClientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(prefixedName) + `$`)
+	if prefixedClientRegex.Match(content) {
+		return true, nil
+	}
+	
+	// Check for dynamic prefixed match with interface-client- prefix
+	dynamicPrefixedName := wgParams.ServerWGNIC + "-client-" + name
+	dynamicPrefixedClientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(dynamicPrefixedName) + `$`)
+	if dynamicPrefixedClientRegex.Match(content) {
+		return true, nil
+	}
+	
+	// Check all possible client config file patterns
+	standardConfigPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
+	if fileExists(standardConfigPath) {
+		return true, nil
+	}
+	
+	alternativeConfigPath := filepath.Join(WIREGUARD_CLIENTS, "wg0-client-"+name+".conf")
+	if fileExists(alternativeConfigPath) {
+		return true, nil
+	}
+	
+	simpleConfigPath := filepath.Join(WIREGUARD_CLIENTS, name+".conf")
+	if fileExists(simpleConfigPath) {
 		return true, nil
 	}
 	
@@ -487,16 +512,37 @@ func listWireGuardClients() ([]Client, error) {
 		return nil, fmt.Errorf("failed to read client directory: %v", err)
 	}
 
+	// Regular expressions to extract client names from filenames
+	wgPrefixRegex := regexp.MustCompile(`^` + regexp.QuoteMeta(wgParams.ServerWGNIC) + `-client-(.+)\.conf$`)
+	wg0PrefixRegex := regexp.MustCompile(`^wg0-client-(.+)\.conf$`)
+	simpleNameRegex := regexp.MustCompile(`^(.+)\.conf$`)
+
 	// Load all files from the client directory
 	for _, file := range files {
 		if file.IsDir() {
 			continue // Skip directories
 		}
 		
-		// Extract filename (without extension) as client name
 		fileName := file.Name()
-		fileExt := filepath.Ext(fileName)
-		clientName := strings.TrimSuffix(fileName, fileExt)
+		clientName := ""
+		
+		// Extract client name based on filename pattern
+		if matches := wgPrefixRegex.FindStringSubmatch(fileName); len(matches) > 1 {
+			// Format: {interface}-client-{name}.conf
+			clientName = matches[1]
+		} else if matches := wg0PrefixRegex.FindStringSubmatch(fileName); len(matches) > 1 {
+			// Format: wg0-client-{name}.conf
+			clientName = matches[1]
+		} else if matches := simpleNameRegex.FindStringSubmatch(fileName); len(matches) > 1 {
+			// Format: {name}.conf
+			clientName = matches[1]
+		} else {
+			// Unknown format, skip
+			if DEBUG_MODE {
+				log.Printf("Skipping file with unrecognized format: %s", fileName)
+			}
+			continue
+		}
 		
 		// Read the client configuration
 		configPath := filepath.Join(WIREGUARD_CLIENTS, fileName)
@@ -657,20 +703,70 @@ func deleteWireGuardClient(name string) error {
 		return fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
 
-	// Find and remove the client's section
-	clientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(name) + `$.*?^$`)
-	newContent := clientRegex.ReplaceAll(content, []byte(""))
-
-	// Write back the updated config
-	err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to update server config: %v", err)
+	// Look for patterns matching either:
+	// 1. "### Client {name}" (exact name match)
+	// 2. "### Client wg0-client-{name}" (prefixed name match)
+	// 3. "### Client {interface}-client-{name}" (dynamic interface prefixed match)
+	
+	// Check for exact name match first
+	exactClientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(name) + `$.*?^$`)
+	if exactClientRegex.Match(content) {
+		newContent := exactClientRegex.ReplaceAll(content, []byte(""))
+		
+		// Write back the updated config
+		err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
+		if err != nil {
+			return fmt.Errorf("failed to update server config: %v", err)
+		}
+	} else {
+		// Check for prefixed name matches
+		prefixedName := "wg0-client-" + name
+		prefixedClientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(prefixedName) + `$.*?^$`)
+		
+		// Also try with dynamic interface name prefix
+		dynamicPrefixedName := wgParams.ServerWGNIC + "-client-" + name
+		dynamicPrefixedClientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(dynamicPrefixedName) + `$.*?^$`)
+		
+		if prefixedClientRegex.Match(content) {
+			newContent := prefixedClientRegex.ReplaceAll(content, []byte(""))
+			err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
+			if err != nil {
+				return fmt.Errorf("failed to update server config: %v", err)
+			}
+		} else if dynamicPrefixedClientRegex.Match(content) {
+			newContent := dynamicPrefixedClientRegex.ReplaceAll(content, []byte(""))
+			err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
+			if err != nil {
+				return fmt.Errorf("failed to update server config: %v", err)
+			}
+		} else if DEBUG_MODE {
+			log.Printf("Warning: Could not find client %s in WireGuard config file", name)
+		}
 	}
 
-	// Remove client config file
-	configPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
-	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to delete client config: %v", err)
+	// Try to remove client config file with different possible patterns
+	standardConfigPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
+	alternativeConfigPath := filepath.Join(WIREGUARD_CLIENTS, "wg0-client-"+name+".conf")
+	simpleConfigPath := filepath.Join(WIREGUARD_CLIENTS, name+".conf")
+	
+	// Try removing all possible config file patterns
+	configPaths := []string{standardConfigPath, alternativeConfigPath, simpleConfigPath}
+	clientRemoved := false
+	
+	for _, configPath := range configPaths {
+		if fileExists(configPath) {
+			if err := os.Remove(configPath); err != nil {
+				return fmt.Errorf("failed to delete client config at %s: %v", configPath, err)
+			}
+			clientRemoved = true
+			if DEBUG_MODE {
+				log.Printf("Removed client config file: %s", configPath)
+			}
+		}
+	}
+	
+	if !clientRemoved && DEBUG_MODE {
+		log.Printf("Warning: Could not find any config files for client %s", name)
 	}
 
 	// Apply the configuration
