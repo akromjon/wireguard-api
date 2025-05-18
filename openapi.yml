@@ -1,13 +1,11 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
-  title: WireGuard VPN Management API
-  description: |
-    API for managing WireGuard VPN users and configurations.
-    Allows adding, listing, and deleting WireGuard clients.
+  title: WireGuard API
+  description: API for managing WireGuard VPN users and service
   version: 1.0.0
   contact:
-    name: API Support
-
+    name: GitHub Repository
+    url: https://github.com/akromjon/wireguard-api
 servers:
   - url: http://localhost:8080
     description: Local development server
@@ -18,41 +16,37 @@ components:
       type: apiKey
       in: header
       name: key
+  
   schemas:
-    Error:
+    APIResponse:
       type: object
       properties:
         success:
           type: boolean
-          example: false
+          description: Indicates if the operation was successful
         message:
           type: string
-          example: Error message
+          description: Human-readable message about the operation
+        data:
+          type: object
+          description: Optional data returned from the operation
+    
     Client:
       type: object
       properties:
         name:
           type: string
-          example: client1
+          description: Client name
         ipv4:
           type: string
-          example: 10.66.66.2
+          description: IPv4 address assigned to the client
         ipv6:
           type: string
-          example: fd42:42:42::2
+          description: IPv6 address assigned to the client
         config:
           type: string
-          example: |
-            [Interface]
-            PrivateKey = abc123...
-            Address = 10.66.66.2/32,fd42:42:42::2/128
-            DNS = 1.1.1.1,1.0.0.1
-            
-            [Peer]
-            PublicKey = def456...
-            PresharedKey = ghi789...
-            Endpoint = vpn.example.com:51820
-            AllowedIPs = 0.0.0.0/0,::/0
+          description: WireGuard configuration file content for the client
+    
     AddUserRequest:
       type: object
       required:
@@ -60,13 +54,17 @@ components:
       properties:
         name:
           type: string
+          description: Client name (alphanumeric, underscore, dash only; max 15 chars)
           example: client1
         ipv4:
           type: string
-          example: 10.66.66.2
+          description: IPv4 address to assign (optional, auto-assigned if not provided)
+          example: 10.8.0.2
         ipv6:
           type: string
+          description: IPv6 address to assign (optional, auto-assigned if not provided)
           example: fd42:42:42::2
+    
     DeleteUserRequest:
       type: object
       required:
@@ -74,227 +72,42 @@ components:
       properties:
         name:
           type: string
+          description: Client name to delete
           example: client1
-    SuccessResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-          example: true
-        message:
-          type: string
-          example: Operation completed successfully
-    ClientsResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-          example: true
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Client'
-    ClientResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-          example: true
-        message:
-          type: string
-          example: Client added successfully
-        data:
-          $ref: '#/components/schemas/Client'
-    WireGuardStatusResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-          example: true
-        data:
-          type: object
-          properties:
-            interface:
-              type: string
-              example: wg0
-            running:
-              type: boolean
-              example: true
-            status_output:
-              type: string
-              example: |-
-                interface: wg0
-                public key: aB3Cdf...
-                private key: (hidden)
-            interface_output:
-              type: string
-              example: |-
-                3: wg0: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1420 qdisc noqueue state UNKNOWN...
-            port_status:
-              type: object
-              properties:
-                port:
-                  type: string
-                  example: "51820"
-                listening:
-                  type: boolean
-                  example: true
-                details:
-                  type: string
-                  example: |-
-                    udp UNCONN 0 0 0.0.0.0:51820 0.0.0.0:* users:((wireguard,pid=1234,fd=5))
-            system_load:
-              type: string
-              example: "load average: 0.08, 0.03, 0.01"
-            peers:
-              type: array
-              items:
-                type: object
-                properties:
-                  client_name:
-                    type: string
-                    example: client1
-                  public_key:
-                    type: string
-                    example: dE5fG6h...
-                  preshared_key:
-                    type: string
-                    example: (hidden)
-                  endpoint:
-                    type: string
-                    example: 192.168.1.5:58765
-                  allowed_ips:
-                    type: string
-                    example: 10.66.66.2/32,fd42:42:42::2/128
-                  latest_handshake:
-                    type: string
-                    example: 1620000000
-                  transfer_rx:
-                    type: string
-                    example: 25460
-                  transfer_tx:
-                    type: string
-                    example: 12840
-            server_info:
-              type: object
-              properties:
-                public_ip:
-                  type: string
-                  example: vpn.example.com
-                port:
-                  type: string
-                  example: "51820"
-                public_key:
-                  type: string
-                  example: aB3Cdf...
-                host_info:
-                  type: string
-                  example: "Darwin admin-machine 22.4.0 Darwin Kernel Version 22.4.0..."
-            system:
-              type: object
-              properties:
-                kernel_module:
-                  type: string
-                  example: "wireguard 16384 0 - Live 0x0000000000000000"
-                service_status:
-                  type: string
-                  example: |-
-                    ● wg-quick@wg0.service - WireGuard via wg-quick(8) for wg0
-                wg_installed:
-                  type: boolean
-                  example: true
-                wg_quick_installed:
-                  type: boolean
-                  example: true
-                config_exists:
-                  type: boolean
-                  example: true
-                params_exists:
-                  type: boolean
-                  example: true
-                config_file:
-                  type: string
-                  example: "/etc/wireguard/wg0.conf"
-                params_file:
-                  type: string
-                  example: "/etc/wireguard/params"
-                clients_dir:
-                  type: string
-                  example: "/home/wireguard/users"
-            parameters:
-              type: object
-              description: "Only included when in debug mode"
-              properties:
-                ServerPubIP:
-                  type: string
-                  example: "vpn.example.com"
-                ServerPubNIC:
-                  type: string
-                  example: "eth0"
-                ServerWGNIC:
-                  type: string
-                  example: "wg0"
-                ServerWGIPv4:
-                  type: string
-                  example: "10.66.66.1"
-                ServerWGIPv6:
-                  type: string
-                  example: "fd42:42:42::1"
-                ServerPort:
-                  type: string
-                  example: "51820"
-                ServerPrivKey:
-                  type: string
-                  example: "(hidden)"
-                ServerPubKey:
-                  type: string
-                  example: "aB3Cdf..."
-                ClientDNS1:
-                  type: string
-                  example: "1.1.1.1"
-                ClientDNS2:
-                  type: string
-                  example: "1.0.0.1"
-                AllowedIPs:
-                  type: string
-                  example: "0.0.0.0/0,::/0"
+
+security:
+  - ApiKeyAuth: []
 
 paths:
   /api/users:
     get:
       summary: List all WireGuard clients
-      description: Returns a list of all configured WireGuard clients and their configurations
+      description: Returns a list of all configured WireGuard clients
       operationId: listUsers
-      security:
-        - ApiKeyAuth: []
       responses:
         '200':
-          description: Successful operation
+          description: List of clients
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ClientsResponse'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Client'
         '401':
-          description: Unauthorized - Invalid or missing API token
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          description: Unauthorized - Missing or invalid API token
+  
   /api/users/add:
     post:
       summary: Add a new WireGuard client
-      description: Creates a new WireGuard client configuration with the provided details
+      description: Creates a new WireGuard client configuration
       operationId: addUser
-      security:
-        - ApiKeyAuth: []
       requestBody:
-        description: Client details
         required: true
         content:
           application/json:
@@ -302,44 +115,33 @@ paths:
               $ref: '#/components/schemas/AddUserRequest'
       responses:
         '200':
-          description: Client added successfully
+          description: Client created successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ClientResponse'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Client added successfully
+                  data:
+                    $ref: '#/components/schemas/Client'
         '400':
-          description: Invalid request - Missing or invalid parameters
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          description: Invalid request
         '401':
-          description: Unauthorized - Invalid or missing API token
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          description: Unauthorized - Missing or invalid API token
         '409':
-          description: Conflict - Client with the same name already exists
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          description: Client already exists
+  
   /api/users/delete:
     post:
       summary: Delete a WireGuard client
       description: Removes a WireGuard client configuration
       operationId: deleteUser
-      security:
-        - ApiKeyAuth: []
       requestBody:
-        description: Client to delete
         required: true
         content:
           application/json:
@@ -351,54 +153,125 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Client deleted successfully
         '400':
-          description: Invalid request - Missing or invalid parameters
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          description: Invalid request
         '401':
-          description: Unauthorized - Invalid or missing API token
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          description: Unauthorized
         '404':
-          description: Not Found - Client does not exist
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          description: Client not found
+
   /api/wireguard-status:
     get:
-      summary: Get WireGuard server status
-      description: Returns detailed information about the WireGuard server status, including connected peers, transfer statistics, and configuration details
+      summary: Get WireGuard service status
+      description: Returns detailed status information about the WireGuard service
       operationId: getWireGuardStatus
-      security:
-        - ApiKeyAuth: []
       responses:
         '200':
-          description: Successful operation
+          description: WireGuard status information
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WireGuardStatusResponse'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      interface:
+                        type: string
+                        example: wg0
+                      running:
+                        type: boolean
+                        example: true
+                      peers:
+                        type: array
+                        items:
+                          type: object
+                      server_info:
+                        type: object
+                      system:
+                        type: object
         '401':
-          description: Unauthorized - Invalid or missing API token
+          description: Unauthorized - Missing or invalid API token
+
+  /api/wireguard/start:
+    post:
+      summary: Start the WireGuard service
+      description: Starts the WireGuard service using systemctl
+      operationId: startWireGuard
+      responses:
+        '200':
+          description: Service started successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: WireGuard service started successfully
+        '401':
+          description: Unauthorized - Missing or invalid API token
         '500':
-          description: Internal server error
+          description: Failed to start the service
+
+  /api/wireguard/stop:
+    post:
+      summary: Stop the WireGuard service
+      description: Stops the WireGuard service using systemctl
+      operationId: stopWireGuard
+      responses:
+        '200':
+          description: Service stopped successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: WireGuard service stopped successfully
+        '401':
+          description: Unauthorized - Missing or invalid API token
+        '500':
+          description: Failed to stop the service
+
+  /api/wireguard/restart:
+    post:
+      summary: Restart the WireGuard service
+      description: Restarts the WireGuard service using systemctl
+      operationId: restartWireGuard
+      responses:
+        '200':
+          description: Service restarted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: WireGuard service restarted successfully
+        '401':
+          description: Unauthorized - Missing or invalid API token
+        '500':
+          description: Failed to restart the service 
