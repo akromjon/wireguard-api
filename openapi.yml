@@ -1,0 +1,225 @@
+openapi: 3.0.0
+info:
+  title: WireGuard VPN Management API
+  description: |
+    API for managing WireGuard VPN users and configurations.
+    Allows adding, listing, and deleting WireGuard clients.
+  version: 1.0.0
+  contact:
+    name: API Support
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: key
+  schemas:
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Error message
+    Client:
+      type: object
+      properties:
+        name:
+          type: string
+          example: client1
+        ipv4:
+          type: string
+          example: 10.66.66.2
+        ipv6:
+          type: string
+          example: fd42:42:42::2
+        config:
+          type: string
+          example: |
+            [Interface]
+            PrivateKey = abc123...
+            Address = 10.66.66.2/32,fd42:42:42::2/128
+            DNS = 1.1.1.1,1.0.0.1
+            
+            [Peer]
+            PublicKey = def456...
+            PresharedKey = ghi789...
+            Endpoint = vpn.example.com:51820
+            AllowedIPs = 0.0.0.0/0,::/0
+    AddUserRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: client1
+        ipv4:
+          type: string
+          example: 10.66.66.2
+        ipv6:
+          type: string
+          example: fd42:42:42::2
+    DeleteUserRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: client1
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Operation completed successfully
+    ClientsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Client'
+    ClientResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Client added successfully
+        data:
+          $ref: '#/components/schemas/Client'
+
+paths:
+  /api/users:
+    get:
+      summary: List all WireGuard clients
+      description: Returns a list of all configured WireGuard clients and their configurations
+      operationId: listUsers
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientsResponse'
+        '401':
+          description: Unauthorized - Invalid or missing API token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/users/add:
+    post:
+      summary: Add a new WireGuard client
+      description: Creates a new WireGuard client configuration with the provided details
+      operationId: addUser
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        description: Client details
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddUserRequest'
+      responses:
+        '200':
+          description: Client added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientResponse'
+        '400':
+          description: Invalid request - Missing or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized - Invalid or missing API token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict - Client with the same name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/users/delete:
+    post:
+      summary: Delete a WireGuard client
+      description: Removes a WireGuard client configuration
+      operationId: deleteUser
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        description: Client to delete
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteUserRequest'
+      responses:
+        '200':
+          description: Client deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request - Missing or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized - Invalid or missing API token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not Found - Client does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
