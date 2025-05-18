@@ -3,9 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -14,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
@@ -72,22 +70,30 @@ type DeleteUserRequest struct {
 // Global params
 var wgParams WGParams
 
-// Auth middleware
-func authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("key")
+// Auth middleware for Gin
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := c.GetHeader("key")
 		if token == "" {
-			respondWithError(w, http.StatusUnauthorized, "Missing API token")
+			c.JSON(http.StatusUnauthorized, APIResponse{
+				Success: false,
+				Message: "Missing API token",
+			})
+			c.Abort()
 			return
 		}
 
 		if token != API_TOKEN {
-			respondWithError(w, http.StatusUnauthorized, "Invalid API token")
+			c.JSON(http.StatusUnauthorized, APIResponse{
+				Success: false,
+				Message: "Invalid API token",
+			})
+			c.Abort()
 			return
 		}
 
-		next.ServeHTTP(w, r)
-	})
+		c.Next()
+	}
 }
 
 // Helper function to get environment variable with fallback
@@ -135,43 +141,30 @@ func main() {
 		log.Fatalf("Failed to load WireGuard parameters: %v", err)
 	}
 
+	// Set Gin to release mode in production
+	if !DEBUG_MODE {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	
 	// Create router
-	router := mux.NewRouter()
+	router := gin.Default()
+
+	// Apply authentication middleware
+	router.Use(authMiddleware())
 
 	// API routes
-	router.HandleFunc("/api/users", listUsersHandler).Methods("GET")
-	router.HandleFunc("/api/users/add", addUserHandler).Methods("POST")
-	router.HandleFunc("/api/users/delete", deleteUserHandler).Methods("POST")
+	router.GET("/api/users", listUsersHandlerGin)
+	router.POST("/api/users/add", addUserHandlerGin)
+	router.POST("/api/users/delete", deleteUserHandlerGin)
 
 	// Debug route
 	if DEBUG_MODE {
-		router.HandleFunc("/api/debug/wireguard-status", debugWireGuardStatusHandler).Methods("GET")
+		router.GET("/api/debug/wireguard-status", debugWireGuardStatusHandlerGin)
 	}
-
-	// Create middleware chain
-	router.Use(authMiddlewareFunc)
 
 	// Start server
 	log.Printf("WireGuard API server running on port %s", API_PORT)
-	log.Fatal(http.ListenAndServe(":"+API_PORT, router))
-}
-
-// Convert the auth middleware to work with gorilla/mux
-func authMiddlewareFunc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("key")
-		if token == "" {
-			respondWithError(w, http.StatusUnauthorized, "Missing API token")
-			return
-		}
-
-		if token != API_TOKEN {
-			respondWithError(w, http.StatusUnauthorized, "Invalid API token")
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
+	log.Fatal(router.Run(":" + API_PORT))
 }
 
 // Load WireGuard parameters from params file
@@ -222,52 +215,57 @@ func loadWGParams() error {
 }
 
 // Handler for listing all users
-func listUsersHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
+func listUsersHandlerGin(c *gin.Context) {
 	clients, err := listWireGuardClients()
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, APIResponse{
+	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Data:    clients,
 	})
 }
 
 // Handler for adding a new user
-func addUserHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
+func addUserHandlerGin(c *gin.Context) {
 	var req AddUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "Invalid request payload",
+		})
 		return
 	}
 
 	// Validate client name
 	nameRegex := regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
 	if !nameRegex.MatchString(req.Name) {
-		respondWithError(w, http.StatusBadRequest, "Client name must contain only alphanumeric characters, underscores, or dashes and be less than 16 characters")
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "Client name must contain only alphanumeric characters, underscores, or dashes and be less than 16 characters",
+		})
 		return
 	}
 
 	// Check if client already exists
 	exists, err := clientExists(req.Name)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 	if exists {
-		respondWithError(w, http.StatusConflict, "A client with this name already exists")
+		c.JSON(http.StatusConflict, APIResponse{
+			Success: false,
+			Message: "A client with this name already exists",
+		})
 		return
 	}
 
@@ -276,7 +274,10 @@ func addUserHandler(w http.ResponseWriter, r *http.Request) {
 	if ipv4 == "" {
 		ipv4, err = getNextAvailableIPv4()
 		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, err.Error())
+			c.JSON(http.StatusInternalServerError, APIResponse{
+				Success: false,
+				Message: err.Error(),
+			})
 			return
 		}
 	}
@@ -286,7 +287,10 @@ func addUserHandler(w http.ResponseWriter, r *http.Request) {
 	if ipv6 == "" && wgParams.ServerWGIPv6 != "" {
 		ipv6, err = getNextAvailableIPv6()
 		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, err.Error())
+			c.JSON(http.StatusInternalServerError, APIResponse{
+				Success: false,
+				Message: err.Error(),
+			})
 			return
 		}
 	}
@@ -294,7 +298,10 @@ func addUserHandler(w http.ResponseWriter, r *http.Request) {
 	// Create the client
 	clientConfig, err := addWireGuardClient(req.Name, ipv4, ipv6)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 
@@ -306,7 +313,7 @@ func addUserHandler(w http.ResponseWriter, r *http.Request) {
 		Config: clientConfig,
 	}
 
-	respondWithJSON(w, http.StatusOK, APIResponse{
+	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: "Client added successfully",
 		Data:    client,
@@ -314,36 +321,43 @@ func addUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // Handler for deleting a user
-func deleteUserHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
+func deleteUserHandlerGin(c *gin.Context) {
 	var req DeleteUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "Invalid request payload",
+		})
 		return
 	}
 
 	// Check if client exists
 	exists, err := clientExists(req.Name)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 	if !exists {
-		respondWithError(w, http.StatusNotFound, "Client not found")
+		c.JSON(http.StatusNotFound, APIResponse{
+			Success: false,
+			Message: "Client not found",
+		})
 		return
 	}
 
 	// Delete the client
 	if err := deleteWireGuardClient(req.Name); err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, APIResponse{
+	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: "Client deleted successfully",
 	})
@@ -360,13 +374,14 @@ func getNextAvailableIPv4() (string, error) {
 	baseIP := fmt.Sprintf("%s.%s.%s", parts[0], parts[1], parts[2])
 	
 	// Get existing IPs from the config file
-	content, err := ioutil.ReadFile(WG_CONFIG_FILE)
+	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return "", fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
 	
 	// Find all IPv4 addresses in the config
-	ipv4Regex := regexp.MustCompile(baseIP + `\.(\d+)`)
+	ipv4Pattern := baseIP + `\.(\d+)`
+	ipv4Regex := regexp.MustCompile(ipv4Pattern)
 	matches := ipv4Regex.FindAllStringSubmatch(string(content), -1)
 	
 	// Collect all used last octets
@@ -404,13 +419,14 @@ func getNextAvailableIPv6() (string, error) {
 	baseIP := parts[0]
 	
 	// Get existing IPs from the config file
-	content, err := ioutil.ReadFile(WG_CONFIG_FILE)
+	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return "", fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
 	
 	// Find all IPv6 addresses in the config
-	ipv6Regex := regexp.MustCompile(regexp.QuoteMeta(baseIP) + `::([\da-fA-F]+)`)
+	ipv6Pattern := regexp.QuoteMeta(baseIP) + `::([\da-fA-F]+)`
+	ipv6Regex := regexp.MustCompile(ipv6Pattern)
 	matches := ipv6Regex.FindAllStringSubmatch(string(content), -1)
 	
 	// Collect all used last parts
@@ -436,7 +452,7 @@ func getNextAvailableIPv6() (string, error) {
 // Check if a client with the given name exists
 func clientExists(name string) (bool, error) {
 	// First check the config file for the client entry
-	content, err := ioutil.ReadFile(WG_CONFIG_FILE)
+	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return false, fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
@@ -457,35 +473,94 @@ func clientExists(name string) (bool, error) {
 
 // List all WireGuard clients
 func listWireGuardClients() ([]Client, error) {
-	content, err := ioutil.ReadFile(WG_CONFIG_FILE)
+	// Create map to hold all clients (using map to avoid duplicates)
+	clientMap := make(map[string]Client)
+	
+	// First, scan the client configuration directory
+	err := os.MkdirAll(WIREGUARD_CLIENTS, 0700)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read WireGuard config: %v", err)
+		return nil, fmt.Errorf("failed to ensure client directory exists: %v", err)
+	}
+
+	files, err := os.ReadDir(WIREGUARD_CLIENTS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read client directory: %v", err)
+	}
+
+	// Load all files from the client directory
+	for _, file := range files {
+		if file.IsDir() {
+			continue // Skip directories
+		}
+		
+		// Extract filename (without extension) as client name
+		fileName := file.Name()
+		fileExt := filepath.Ext(fileName)
+		clientName := strings.TrimSuffix(fileName, fileExt)
+		
+		// Read the client configuration
+		configPath := filepath.Join(WIREGUARD_CLIENTS, fileName)
+		configData, err := os.ReadFile(configPath)
+		if err != nil {
+			log.Printf("Warning: Failed to read file %s: %v", configPath, err)
+			continue
+		}
+		
+		// Create basic client info
+		client := Client{
+			Name:   clientName,
+			Config: string(configData),
+		}
+		
+		// Try to extract IP addresses if this looks like a WireGuard config
+		configStr := string(configData)
+		if strings.Contains(configStr, "[Interface]") {
+			// Simple extraction of Address line without regex
+			lines := strings.Split(configStr, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "Address = ") {
+					addressLine := strings.TrimPrefix(line, "Address = ")
+					addresses := strings.Split(addressLine, ",")
+					
+					// Extract IPv4 address
+					if len(addresses) > 0 {
+						ipv4WithPrefix := addresses[0]
+						if strings.Contains(ipv4WithPrefix, "/") {
+							client.IPV4 = strings.Split(ipv4WithPrefix, "/")[0]
+						}
+					}
+					
+					// Extract IPv6 address if present
+					if len(addresses) > 1 {
+						ipv6WithPrefix := addresses[1]
+						if strings.Contains(ipv6WithPrefix, "/") {
+							client.IPV6 = strings.Split(ipv6WithPrefix, "/")[0]
+						}
+					}
+					
+					break // Found what we need
+				}
+			}
+		}
+		
+		// Store in our map
+		clientMap[clientName] = client
 	}
 	
-	// Extract client sections
-	clientRegex := regexp.MustCompile(`(?m)^### Client ([a-zA-Z0-9_-]+)$\n\[Peer\]\nPublicKey = ([a-zA-Z0-9+/=]+)\nPresharedKey = ([a-zA-Z0-9+/=]+)\nAllowedIPs = ([^,]+),(.+)$`)
-	matches := clientRegex.FindAllStringSubmatch(string(content), -1)
-	
-	clients := make([]Client, 0, len(matches))
-	for _, match := range matches {
-		if len(match) >= 6 {
-			client := Client{
-				Name: match[1],
-				IPV4: strings.TrimSuffix(match[4], "/32"),
-				IPV6: strings.TrimSuffix(match[5], "/128"),
-			}
-			
-			// Try to read config file
-			configPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+client.Name+".conf")
-			if configData, err := ioutil.ReadFile(configPath); err == nil {
-				client.Config = string(configData)
-			}
-			
-			clients = append(clients, client)
-		}
+	// Convert map to slice for return
+	clients := make([]Client, 0, len(clientMap))
+	for _, client := range clientMap {
+		clients = append(clients, client)
 	}
 	
 	return clients, nil
+}
+
+// Check if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // Add a new WireGuard client
@@ -542,7 +617,7 @@ AllowedIPs = %s
 	   wgParams.ServerPubKey, preSharedKey, endpoint, wgParams.AllowedIPs)
 
 	// Write client config to file
-	err = ioutil.WriteFile(configPath, []byte(clientConfig), 0600)
+	err = os.WriteFile(configPath, []byte(clientConfig), 0600)
 	if err != nil {
 		return "", fmt.Errorf("failed to write client config: %v", err)
 	}
@@ -577,7 +652,7 @@ AllowedIPs = %s/32,%s/128
 // Delete a WireGuard client
 func deleteWireGuardClient(name string) error {
 	// Read the server config
-	content, err := ioutil.ReadFile(WG_CONFIG_FILE)
+	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
@@ -587,7 +662,7 @@ func deleteWireGuardClient(name string) error {
 	newContent := clientRegex.ReplaceAll(content, []byte(""))
 
 	// Write back the updated config
-	err = ioutil.WriteFile(WG_CONFIG_FILE, newContent, 0600)
+	err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to update server config: %v", err)
 	}
@@ -685,7 +760,7 @@ func syncWireGuardConf() error {
 }
 
 // Debug handler for WireGuard status
-func debugWireGuardStatusHandler(w http.ResponseWriter, r *http.Request) {
+func debugWireGuardStatusHandlerGin(c *gin.Context) {
 	// Check WireGuard installed
 	wgInstalled, wgOutput := executeCommand("which", "wg")
 	wgQuickInstalled, wgQuickOutput := executeCommand("which", "wg-quick")
@@ -724,7 +799,7 @@ func debugWireGuardStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"parameters": wgParams,
 	}
 	
-	respondWithJSON(w, http.StatusOK, APIResponse{
+	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Data: debugInfo,
 	})
@@ -746,24 +821,3 @@ func executeCommand(command string, args ...string) (string, string) {
 	
 	return "success", output
 }
-
-// Check if a file exists
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-// Helpers for HTTP responses
-func respondWithError(w http.ResponseWriter, code int, message string) {
-	respondWithJSON(w, code, APIResponse{
-		Success: false,
-		Message: message,
-	})
-}
-
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	response, _ := json.Marshal(payload)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	w.Write(response)
-} 
