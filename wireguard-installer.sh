@@ -314,7 +314,6 @@ PostDown = iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE" >>
 		systemctl enable "wg-quick@${SERVER_WG_NIC}"
 	fi
 
-	newClient
 	echo -e "${GREEN}If you want to add more clients, you simply need to run this script another time!${NC}"
 
 	# Check if WireGuard is running
