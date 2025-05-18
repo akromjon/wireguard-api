@@ -158,7 +158,7 @@ func main() {
 	router.POST("/api/users/delete", deleteUserHandlerGin)
 
 	// WireGuard status route
-	router.GET("/api/wireguard-status", wireGuardStatusHandlerGin)
+	router.GET("/api/wireguard/status", wireGuardStatusHandlerGin)
 	
 	// WireGuard control routes
 	router.POST("/api/wireguard/start", wireGuardStartHandlerGin)

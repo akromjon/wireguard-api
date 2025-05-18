@@ -72,7 +72,7 @@ All endpoints require authentication with the API token in the request header: `
 
 ### Get WireGuard Status
 
-**GET /api/wireguard-status**
+**GET /api/wireguard/status**
 
 Returns detailed information about the WireGuard server status, including connected peers, transfer statistics, and configuration details.
 

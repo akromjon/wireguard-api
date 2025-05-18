@@ -168,7 +168,7 @@ paths:
         '404':
           description: Client not found
 
-  /api/wireguard-status:
+  /api/wireguard/status:
     get:
       summary: Get WireGuard service status
       description: Returns detailed status information about the WireGuard service
