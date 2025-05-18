@@ -4,6 +4,7 @@ set -e
 # github: https://github.com/akromjon/wireguard-api
 URL_PREFIX="https://github.com/akromjon/wireguard-api/releases/download/v1.0.0"
 INSTALL_DIR=${INSTALL_DIR:-/usr/local/bin}
+CONFIG_DIR=${CONFIG_DIR:-/etc/wireguard-api}
 
 case "$(uname -sm)" in
   "Darwin x86_64") FILENAME="wireguard-darwin-amd64" ;;
@@ -30,6 +31,26 @@ fi
 if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &> /dev/null; then
   echo "Installing systemd service..."
   
+  # Create config directory and .env file if it doesn't exist
+  if [ ! -d "$CONFIG_DIR" ]; then
+    mkdir -p "$CONFIG_DIR"
+    echo "Created configuration directory: $CONFIG_DIR"
+  fi
+  
+  # Check if .env file exists, create a sample one if it doesn't
+  if [ ! -f "$CONFIG_DIR/.env" ]; then
+    echo "Creating sample .env file in $CONFIG_DIR"
+    cat > "$CONFIG_DIR/.env" << 'EOF'
+# Wireguard API Configuration
+PORT=8080
+WG_CONFIG_DIR=/etc/wireguard
+# Add other environment variables as needed
+EOF
+    echo "Please review and modify $CONFIG_DIR/.env as needed"
+  else
+    echo "Using existing .env file in $CONFIG_DIR"
+  fi
+  
   # Create service file
   cat > /tmp/wireguard.service << 'EOF'
 [Unit]
@@ -39,7 +60,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
+WorkingDirectory=/etc/wireguard-api
 ExecStart=/usr/local/bin/wireguard
+EnvironmentFile=/etc/wireguard-api/.env
 Restart=on-failure
 RestartSec=5
 
@@ -61,9 +84,12 @@ EOF
 fi
 
 # let's check if the service is running
-if ! systemctl is-active --quiet wireguard.service; then
-  echo "Failed to start wireguard service" >&2
-  exit 1
+if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &> /dev/null; then
+  if ! systemctl is-active --quiet wireguard.service; then
+    echo "Failed to start wireguard service" >&2
+    echo "Check logs with: journalctl -u wireguard.service" >&2
+    exit 1
+  fi
 fi
 
 echo "wireguard V1 is successfully installed"
