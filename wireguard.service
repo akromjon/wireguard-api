@@ -1,0 +1,13 @@
+[Unit]
+Description=Wireguard API Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/wireguard
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target 

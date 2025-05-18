@@ -1,110 +1,107 @@
-# WireGuard VPN Management API
+# WireGuard VPN API
 
-A Go-based REST API for managing WireGuard VPN configurations and users.
+A REST API for managing WireGuard VPN users and configurations. This API allows you to add, list, and delete WireGuard clients programmatically.
 
 ## Features
 
-- Add new WireGuard clients
-- List existing WireGuard clients
-- Delete WireGuard clients
-- All responses in JSON format
-- Token-based authentication
-- Debug mode for troubleshooting
+- **RESTful API** for WireGuard management
+- **Token-based authentication** for secure access
+- **Client management**: list, add, and delete WireGuard clients
+- **Cross-platform support** with graceful fallbacks for different system commands
+- **Detailed status information** about the WireGuard server and its peers
 
-## Setup
+## Requirements
 
-### Prerequisites
+- WireGuard installed and configured on the server
+- Go 1.16 or later (for building from source)
+- Linux system with systemd (for service installation)
 
-- WireGuard installed on your server
-- Go 1.15 or higher
-- WireGuard configuration at `/etc/wireguard/wg0.conf`
-- WireGuard params file at `/etc/wireguard/params`
+## Quick Installation
 
-### Configuration
-
-Create a `.env` file in the same directory as the executable with the following content:
-
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/wireguard-api.git
+cd wireguard-api
 ```
-# WireGuard API Configuration
 
-# API Settings
+2. Run the installation script as root:
+```bash
+chmod +x install.sh
+sudo ./install.sh
+```
+
+The script will:
+- Check if WireGuard is installed and install it if needed
+- Install Go and other dependencies
+- Create a dedicated service user
+- Build and install the application
+- Create a systemd service
+- Generate a random API token
+- Configure permissions
+- Start the service
+
+After installation, you'll receive the API URL and token.
+
+## Manual Installation
+
+If you prefer to install the service manually:
+
+1. Build the application:
+```bash
+go build -o wireguard-api
+```
+
+2. Create a `.env` file with your configuration:
+```
 API_PORT=8080
-API_TOKEN=your-secure-random-token
-
-# WireGuard Paths
+API_TOKEN=your-secure-api-token
 WG_CONFIG_FILE=/etc/wireguard/wg0.conf
 WG_PARAMS_FILE=/etc/wireguard/params
 WIREGUARD_CLIENTS=/home/wireguard/users
-
-# Debug Settings
 DEBUG_MODE=false
 ```
 
-Make sure to replace `your-secure-random-token` with a strong random token for API authentication.
-
-### Running the API
-
+3. Run the application:
 ```bash
-go build -o wireguard-api
 ./wireguard-api
 ```
 
-Or using the Makefile:
-
-```bash
-# Just run (without building)
-make run
-
-# Build and then run
-make start
-```
-
-## Troubleshooting
-
-If you encounter issues, you can enable debug mode by setting `DEBUG_MODE=true` in your `.env` file. This will:
-
-1. Enable detailed error logging
-2. Add a debugging endpoint at `/api/debug/wireguard-status` that provides information about your WireGuard configuration
-
-The debug endpoint returns:
-- WireGuard installation status
-- Configuration file status
-- Current WireGuard parameters
-- WireGuard running status
-- Server information
-
 ## API Endpoints
 
-### Authentication
+All endpoints require authentication with the API token in the request header: `key: your-api-token`
 
-All API requests require an API token in the `key` header:
+### Get WireGuard Status
 
-```
-key: your-secure-random-token
-```
+**GET /api/wireguard-status**
 
-### List Users
+Returns detailed information about the WireGuard server status, including connected peers, transfer statistics, and configuration details.
 
-**GET** `/api/users`
+### List Clients
 
-Returns all WireGuard clients with their configurations.
+**GET /api/users**
 
-### Add User
+Returns a list of all configured WireGuard clients and their configurations.
 
-**POST** `/api/users/add`
+### Add Client
+
+**POST /api/users/add**
+
+Creates a new WireGuard client configuration.
 
 Request body:
 ```json
 {
   "name": "client1",
-  "ipv4": "10.66.66.2",  // Optional, auto-assigned if not provided
-  "ipv6": "fd42:42:42::2" // Optional, auto-assigned if not provided
+  "ipv4": "10.66.66.2",   // Optional: auto-assigned if not provided
+  "ipv6": "fd42:42:42::2" // Optional: auto-assigned if not provided
 }
 ```
 
-### Delete User
+### Delete Client
 
-**POST** `/api/users/delete`
+**POST /api/users/delete**
+
+Removes a WireGuard client configuration.
 
 Request body:
 ```json
@@ -113,22 +110,19 @@ Request body:
 }
 ```
 
-### Debug WireGuard Status (Debug Mode Only)
+## Security Considerations
 
-**GET** `/api/debug/wireguard-status`
+- The API token should be kept secure
+- For production use, consider configuring SSL termination with Nginx or similar
+- Use a firewall to restrict access to the API port
+- Regularly update the server and the API
 
-Returns detailed information about the WireGuard configuration and system status.
+## Troubleshooting
 
-## Response Format
+- Check service status: `systemctl status wireguard-api`
+- View logs: `journalctl -u wireguard-api -f`
+- Verify permissions: Ensure the service user has access to WireGuard configuration files
 
-All API responses follow this format:
+## License
 
-```json
-{
-  "success": true,
-  "message": "Operation status message",
-  "data": {} // Operation data if applicable
-}
-```
-
-For client configurations, the `data` field will include the WireGuard configuration as a plain text string in the `config` field. 
+MIT 
