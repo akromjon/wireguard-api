@@ -25,6 +25,7 @@ var (
 	WG_CONFIG_FILE    = getEnv("WG_CONFIG_FILE", "/etc/wireguard/wg0.conf")
 	WG_PARAMS_FILE    = getEnv("WG_PARAMS_FILE", "/etc/wireguard/params")
 	WIREGUARD_CLIENTS = getEnv("WIREGUARD_CLIENTS", "/home/wireguard/users")
+	DEBUG_MODE        = getEnv("DEBUG_MODE", "false") == "true"
 )
 
 // WireGuard parameters loaded from params file
@@ -112,6 +113,7 @@ func loadEnv() {
 	WG_CONFIG_FILE = getEnv("WG_CONFIG_FILE", "/etc/wireguard/wg0.conf")
 	WG_PARAMS_FILE = getEnv("WG_PARAMS_FILE", "/etc/wireguard/params")
 	WIREGUARD_CLIENTS = getEnv("WIREGUARD_CLIENTS", "/home/wireguard/users")
+	DEBUG_MODE = getEnv("DEBUG_MODE", "false") == "true"
 }
 
 // Main function
@@ -125,6 +127,7 @@ func main() {
 	log.Printf("WireGuard config file: %s", WG_CONFIG_FILE)
 	log.Printf("WireGuard params file: %s", WG_PARAMS_FILE)
 	log.Printf("WireGuard clients directory: %s", WIREGUARD_CLIENTS)
+	log.Printf("Debug mode: %v", DEBUG_MODE)
 	
 	// Load WireGuard params
 	err := loadWGParams()
@@ -139,6 +142,11 @@ func main() {
 	router.HandleFunc("/api/users", listUsersHandler).Methods("GET")
 	router.HandleFunc("/api/users/add", addUserHandler).Methods("POST")
 	router.HandleFunc("/api/users/delete", deleteUserHandler).Methods("POST")
+
+	// Debug route
+	if DEBUG_MODE {
+		router.HandleFunc("/api/debug/wireguard-status", debugWireGuardStatusHandler).Methods("GET")
+	}
 
 	// Create middleware chain
 	router.Use(authMiddlewareFunc)
@@ -630,17 +638,103 @@ func generatePSK() (string, error) {
 func syncWireGuardConf() error {
 	stripCmd := exec.Command("wg-quick", "strip", wgParams.ServerWGNIC)
 	var stripOutput bytes.Buffer
+	var stripError bytes.Buffer
 	stripCmd.Stdout = &stripOutput
+	stripCmd.Stderr = &stripError
 	
 	err := stripCmd.Run()
 	if err != nil {
-		return fmt.Errorf("wg-quick strip command failed: %v", err)
+		if DEBUG_MODE {
+			log.Printf("wg-quick strip command failed: %v", err)
+			log.Printf("stderr: %s", stripError.String())
+		}
+		return fmt.Errorf("wg-quick strip command failed: %v, stderr: %s", err, stripError.String())
 	}
 	
 	syncCmd := exec.Command("wg", "syncconf", wgParams.ServerWGNIC, "/dev/stdin")
 	syncCmd.Stdin = &stripOutput
+	var syncError bytes.Buffer
+	syncCmd.Stderr = &syncError
 	
-	return syncCmd.Run()
+	err = syncCmd.Run()
+	if err != nil {
+		if DEBUG_MODE {
+			log.Printf("wg syncconf command failed: %v", err)
+			log.Printf("stderr: %s", syncError.String())
+		}
+		return fmt.Errorf("wg syncconf command failed: %v, stderr: %s", err, syncError.String())
+	}
+	
+	return nil
+}
+
+// Debug handler for WireGuard status
+func debugWireGuardStatusHandler(w http.ResponseWriter, r *http.Request) {
+	// Check WireGuard installed
+	wgInstalled, wgOutput := executeCommand("which", "wg")
+	wgQuickInstalled, wgQuickOutput := executeCommand("which", "wg-quick")
+	
+	// Check WireGuard configuration
+	configExists := fileExists(WG_CONFIG_FILE)
+	paramsExists := fileExists(WG_PARAMS_FILE)
+	
+	// Check WireGuard status if configuration exists
+	var wgStatus, wgStatusOutput string
+	if configExists {
+		wgStatus, wgStatusOutput = executeCommand("wg", "show")
+	}
+	
+	// Get server information
+	hostInfo, _ := executeCommand("uname", "-a")
+	
+	// Prepare response
+	debugInfo := map[string]interface{}{
+		"wireguard": map[string]interface{}{
+			"wg_installed": wgInstalled,
+			"wg_output": wgOutput,
+			"wg_quick_installed": wgQuickInstalled,
+			"wg_quick_output": wgQuickOutput,
+			"config_exists": configExists,
+			"params_exists": paramsExists,
+			"wg_running": wgStatus == "success",
+			"wg_status_output": wgStatusOutput,
+		},
+		"server": map[string]interface{}{
+			"host_info": hostInfo,
+			"config_file": WG_CONFIG_FILE,
+			"params_file": WG_PARAMS_FILE,
+			"clients_dir": WIREGUARD_CLIENTS,
+		},
+		"parameters": wgParams,
+	}
+	
+	respondWithJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: debugInfo,
+	})
+}
+
+// Helper function to execute a command and return if it succeeded and the output
+func executeCommand(command string, args ...string) (string, string) {
+	cmd := exec.Command(command, args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	
+	err := cmd.Run()
+	output := stdout.String()
+	if err != nil {
+		return "error", fmt.Sprintf("Error: %v\nStdout: %s\nStderr: %s", err, output, stderr.String())
+	}
+	
+	return "success", output
+}
+
+// Check if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // Helpers for HTTP responses

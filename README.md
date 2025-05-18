@@ -9,6 +9,7 @@ A Go-based REST API for managing WireGuard VPN configurations and users.
 - Delete WireGuard clients
 - All responses in JSON format
 - Token-based authentication
+- Debug mode for troubleshooting
 
 ## Setup
 
@@ -34,6 +35,9 @@ API_TOKEN=your-secure-random-token
 WG_CONFIG_FILE=/etc/wireguard/wg0.conf
 WG_PARAMS_FILE=/etc/wireguard/params
 WIREGUARD_CLIENTS=/home/wireguard/users
+
+# Debug Settings
+DEBUG_MODE=false
 ```
 
 Make sure to replace `your-secure-random-token` with a strong random token for API authentication.
@@ -44,6 +48,30 @@ Make sure to replace `your-secure-random-token` with a strong random token for A
 go build -o wireguard-api
 ./wireguard-api
 ```
+
+Or using the Makefile:
+
+```bash
+# Just run (without building)
+make run
+
+# Build and then run
+make start
+```
+
+## Troubleshooting
+
+If you encounter issues, you can enable debug mode by setting `DEBUG_MODE=true` in your `.env` file. This will:
+
+1. Enable detailed error logging
+2. Add a debugging endpoint at `/api/debug/wireguard-status` that provides information about your WireGuard configuration
+
+The debug endpoint returns:
+- WireGuard installation status
+- Configuration file status
+- Current WireGuard parameters
+- WireGuard running status
+- Server information
 
 ## API Endpoints
 
@@ -84,6 +112,12 @@ Request body:
   "name": "client1"
 }
 ```
+
+### Debug WireGuard Status (Debug Mode Only)
+
+**GET** `/api/debug/wireguard-status`
+
+Returns detailed information about the WireGuard configuration and system status.
 
 ## Response Format
 
