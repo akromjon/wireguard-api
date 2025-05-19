@@ -75,18 +75,14 @@ func authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.GetHeader("key")
 		if token == "" {
-			c.JSON(http.StatusUnauthorized, APIResponse{
-				Success: false,
-				Message: "Missing API token",
+			c.JSON(http.StatusNotFound, APIResponse{
 			})
 			c.Abort()
 			return
 		}
 
 		if token != API_TOKEN {
-			c.JSON(http.StatusUnauthorized, APIResponse{
-				Success: false,
-				Message: "Invalid API token",
+			c.JSON(http.StatusNotFound, APIResponse{
 			})
 			c.Abort()
 			return

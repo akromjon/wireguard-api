@@ -85,291 +85,21 @@ EOF
     fi
   fi
   
-  # Create OpenAPI documentation in config directory
-  echo "Creating OpenAPI documentation..."
-  cat > "$CONFIG_DIR/openapi.yaml" << 'EOF'
-openapi: 3.0.3
-info:
-  title: WireGuard API
-  description: API for managing WireGuard VPN users and service
-  version: 1.0.0
-  contact:
-    name: GitHub Repository
-    url: https://github.com/akromjon/wireguard-api
-servers:
-  - url: http://localhost:8080
-    description: Local development server
-
-components:
-  securitySchemes:
-    ApiKeyAuth:
-      type: apiKey
-      in: header
-      name: key
-  
-  schemas:
-    APIResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-          description: Indicates if the operation was successful
-        message:
-          type: string
-          description: Human-readable message about the operation
-        data:
-          type: object
-          description: Optional data returned from the operation
+  # Copy wireguard.service file to systemd directory
+  if [ -f "./wireguard.service" ]; then
+    echo "Using existing wireguard.service file"
     
-    Client:
-      type: object
-      properties:
-        name:
-          type: string
-          description: Client name
-        ipv4:
-          type: string
-          description: IPv4 address assigned to the client
-        ipv6:
-          type: string
-          description: IPv6 address assigned to the client
-        config:
-          type: string
-          description: WireGuard configuration file content for the client
+    # Copy service file to systemd directory
+    if ! cp ./wireguard.service /etc/systemd/system/; then
+      echo "Failed to copy service file to /etc/systemd/system/; try with sudo" >&2
+      exit 1
+    fi
+  else
+    echo "wireguard.service file not found in current directory"
+    echo "Creating default service file..."
     
-    AddUserRequest:
-      type: object
-      required:
-        - name
-      properties:
-        name:
-          type: string
-          description: Client name (alphanumeric, underscore, dash only; max 15 chars)
-          example: client1
-        ipv4:
-          type: string
-          description: IPv4 address to assign (optional, auto-assigned if not provided)
-          example: 10.8.0.2
-        ipv6:
-          type: string
-          description: IPv6 address to assign (optional, auto-assigned if not provided)
-          example: fd42:42:42::2
-    
-    DeleteUserRequest:
-      type: object
-      required:
-        - name
-      properties:
-        name:
-          type: string
-          description: Client name to delete
-          example: client1
-
-security:
-  - ApiKeyAuth: []
-
-paths:
-  /api/users:
-    get:
-      summary: List all WireGuard clients
-      description: Returns a list of all configured WireGuard clients
-      operationId: listUsers
-      responses:
-        '200':
-          description: List of clients
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Client'
-        '401':
-          description: Unauthorized - Missing or invalid API token
-  
-  /api/users/add:
-    post:
-      summary: Add a new WireGuard client
-      description: Creates a new WireGuard client configuration
-      operationId: addUser
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AddUserRequest'
-      responses:
-        '200':
-          description: Client created successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  message:
-                    type: string
-                    example: Client added successfully
-                  data:
-                    $ref: '#/components/schemas/Client'
-        '400':
-          description: Invalid request
-        '401':
-          description: Unauthorized - Missing or invalid API token
-        '409':
-          description: Client already exists
-  
-  /api/users/delete:
-    post:
-      summary: Delete a WireGuard client
-      description: Removes a WireGuard client configuration
-      operationId: deleteUser
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DeleteUserRequest'
-      responses:
-        '200':
-          description: Client deleted successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  message:
-                    type: string
-                    example: Client deleted successfully
-        '400':
-          description: Invalid request
-        '401':
-          description: Unauthorized
-        '404':
-          description: Client not found
-
-  /api/wireguard-status:
-    get:
-      summary: Get WireGuard service status
-      description: Returns detailed status information about the WireGuard service
-      operationId: getWireGuardStatus
-      responses:
-        '200':
-          description: WireGuard status information
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      interface:
-                        type: string
-                        example: wg0
-                      running:
-                        type: boolean
-                        example: true
-                      peers:
-                        type: array
-                        items:
-                          type: object
-                      server_info:
-                        type: object
-                      system:
-                        type: object
-        '401':
-          description: Unauthorized - Missing or invalid API token
-
-  /api/wireguard/start:
-    post:
-      summary: Start the WireGuard service
-      description: Starts the WireGuard service using systemctl
-      operationId: startWireGuard
-      responses:
-        '200':
-          description: Service started successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  message:
-                    type: string
-                    example: WireGuard service started successfully
-        '401':
-          description: Unauthorized - Missing or invalid API token
-        '500':
-          description: Failed to start the service
-
-  /api/wireguard/stop:
-    post:
-      summary: Stop the WireGuard service
-      description: Stops the WireGuard service using systemctl
-      operationId: stopWireGuard
-      responses:
-        '200':
-          description: Service stopped successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  message:
-                    type: string
-                    example: WireGuard service stopped successfully
-        '401':
-          description: Unauthorized - Missing or invalid API token
-        '500':
-          description: Failed to stop the service
-
-  /api/wireguard/restart:
-    post:
-      summary: Restart the WireGuard service
-      description: Restarts the WireGuard service using systemctl
-      operationId: restartWireGuard
-      responses:
-        '200':
-          description: Service restarted successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  message:
-                    type: string
-                    example: WireGuard service restarted successfully
-        '401':
-          description: Unauthorized - Missing or invalid API token
-        '500':
-          description: Failed to restart the service
-EOF
-  echo "OpenAPI documentation created at $CONFIG_DIR/openapi.yaml"
-  
-  # Create service file
-  cat > /tmp/wireguard.service << 'EOF'
+    # Create service file
+    cat > /tmp/wireguard.service << 'EOF'
 [Unit]
 Description=Wireguard API Service
 After=network.target
@@ -387,10 +117,11 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-  # Copy service file to systemd directory
-  if ! cp /tmp/wireguard.service /etc/systemd/system/; then
-    echo "Failed to copy service file to /etc/systemd/system/; try with sudo" >&2
-    exit 1
+    # Copy service file to systemd directory
+    if ! cp /tmp/wireguard.service /etc/systemd/system/; then
+      echo "Failed to copy service file to /etc/systemd/system/; try with sudo" >&2
+      exit 1
+    fi
   fi
   
   # Reload systemd, enable and start service
@@ -410,7 +141,6 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &> /dev/null; then
 fi
 
 echo "wireguard V1 is successfully installed"
-echo "API Documentation available at $CONFIG_DIR/openapi.yaml"
 
 # Display API access information
 if [[ -f "$CONFIG_DIR/.env" ]]; then
