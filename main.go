@@ -622,6 +622,11 @@ func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
 		return "", fmt.Errorf("client configuration file already exists at %s", configPath)
 	}
 
+	// Validate that at least one IP address is provided
+	if ipv4 == "" && ipv6 == "" {
+		return "", fmt.Errorf("at least one IP address (IPv4 or IPv6) must be provided")
+	}
+
 	// Generate key pair for the client
 	privateKey, err := generatePrivateKey()
 	if err != nil {
@@ -647,10 +652,20 @@ func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
 	}
 	
 	endpoint = endpoint + ":" + wgParams.ServerPort
+
+	// Format Address line based on provided IP addresses
+	var addressParts []string
+	if ipv4 != "" {
+		addressParts = append(addressParts, ipv4+"/32")
+	}
+	if ipv6 != "" {
+		addressParts = append(addressParts, ipv6+"/128")
+	}
+	addressLine := fmt.Sprintf("Address = %s", strings.Join(addressParts, ","))
 	
 	clientConfig := fmt.Sprintf(`[Interface]
 PrivateKey = %s
-Address = %s/32,%s/128
+%s
 DNS = %s,%s
 
 [Peer]
@@ -658,7 +673,7 @@ PublicKey = %s
 PresharedKey = %s
 Endpoint = %s
 AllowedIPs = %s
-`, privateKey, ipv4, ipv6, wgParams.ClientDNS1, wgParams.ClientDNS2,
+`, privateKey, addressLine, wgParams.ClientDNS1, wgParams.ClientDNS2,
 	   wgParams.ServerPubKey, preSharedKey, endpoint, wgParams.AllowedIPs)
 
 	// Write client config to file
@@ -668,13 +683,22 @@ AllowedIPs = %s
 	}
 
 	// Add client to server config
+	var allowedIPsParts []string
+	if ipv4 != "" {
+		allowedIPsParts = append(allowedIPsParts, ipv4+"/32")
+	}
+	if ipv6 != "" {
+		allowedIPsParts = append(allowedIPsParts, ipv6+"/128")
+	}
+	allowedIPs := strings.Join(allowedIPsParts, ",")
+
 	serverConfigUpdate := fmt.Sprintf(`
 ### Client %s
 [Peer]
 PublicKey = %s
 PresharedKey = %s
-AllowedIPs = %s/32,%s/128
-`, name, publicKey, preSharedKey, ipv4, ipv6)
+AllowedIPs = %s
+`, name, publicKey, preSharedKey, allowedIPs)
 
 	f, err := os.OpenFile(WG_CONFIG_FILE, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
