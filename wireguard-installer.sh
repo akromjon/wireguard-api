@@ -344,43 +344,8 @@ PostDown = iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE" >>
 	fi
 	
 	# Install WireGuard API
-	echo -e "\n${GREEN}Do you want to install the WireGuard API?${NC}"
-	read -rp "Install WireGuard API? [y/n]: " -e INSTALL_API
-	INSTALL_API=${INSTALL_API:-n}
-	
-	if [[ $INSTALL_API == 'y' ]]; then
-		echo -e "\n${GREEN}Installing WireGuard API...${NC}"
-		
-		# Download the install.sh script
-		API_INSTALL_SCRIPT="/tmp/wireguard-api-install.sh"
-		curl -sSLf "https://github.com/akromjon/wireguard-api/raw/main/install.sh" -o "$API_INSTALL_SCRIPT"
-		
-		if [ ! -f "$API_INSTALL_SCRIPT" ]; then
-			echo -e "${RED}Failed to download WireGuard API installation script.${NC}"
-			return
-		fi
-		
-		# Make it executable
-		chmod +x "$API_INSTALL_SCRIPT"
-		
-		# Set configuration environment variables
-		export CONFIG_DIR="/etc/wireguard-api"
-		export WG_CONFIG_FILE="/etc/wireguard/${SERVER_WG_NIC}.conf"
-		export WG_PARAMS_FILE="/etc/wireguard/params"
-		export WIREGUARD_CLIENTS=$(getHomeDirForClient "dummy")
-		
-		# Run the installation script
-		$API_INSTALL_SCRIPT
-		
-		# Check if installation was successful
-		if [ $? -eq 0 ]; then
-			echo -e "\n${GREEN}WireGuard API installed successfully${NC}"
-			echo -e "You can access the API at: http://$(hostname -I | awk '{print $1}'):8080"
-			echo -e "Check API token in ${CONFIG_DIR}/.env"
-		else
-			echo -e "\n${RED}WireGuard API installation failed${NC}"
-		fi
-	fi
+	echo -e "\n${GREEN}Installing WireGuard API...${NC}"
+	bash ./install.sh
 }
 
 function newClient() {
