@@ -18,16 +18,22 @@ A REST API for managing WireGuard VPN users and configurations. This API allows 
 
 ## Quick Installation
 
+### One-Command Installation
+```bash
+curl -sSL https://raw.githubusercontent.com/akromjon/wireguard-api/main/wireguard-installer.sh | sudo bash
+```
+
+### Manual Installation Steps
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/wireguard-api.git
+git clone https://github.com/akromjon/wireguard-api.git
 cd wireguard-api
 ```
 
 2. Run the installation script as root:
 ```bash
-chmod +x install.sh
-sudo ./install.sh
+chmod +x wireguard-installer.sh
+sudo ./wireguard-installer.sh
 ```
 
 The script will:
