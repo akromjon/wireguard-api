@@ -144,12 +144,12 @@ echo "wireguard V1 is successfully installed"
 
 # Display API access information
 if [[ -f "$CONFIG_DIR/.env" ]]; then
-  API_PORT=$(grep "^PORT=" "$CONFIG_DIR/.env" | cut -d= -f2 || echo "8080")
+  API_PORT=$(grep "^API_PORT=" "$CONFIG_DIR/.env" | cut -d= -f2 || echo "8080")
   API_TOKEN=$(grep "^API_TOKEN=" "$CONFIG_DIR/.env" | cut -d= -f2)
   
   echo ""
   echo -e "\033[0;32mAPI Information:\033[0m"
-  echo -e "- Endpoint: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost"):$API_PORT"
+  echo -e "- Service API: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost"):$API_PORT"
   echo -e "- API Token: \033[0;33m$API_TOKEN\033[0m"
   echo -e "- Example usage: curl -H \"key: $API_TOKEN\" http://localhost:$API_PORT/api/wireguard-status"
 fi
