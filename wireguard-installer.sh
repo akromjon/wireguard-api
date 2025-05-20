@@ -345,7 +345,7 @@ PostDown = iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE" >>
 	
 	# Install WireGuard API
 	echo -e "\n${GREEN}Installing WireGuard API...${NC}"
-	bash ./install.sh
+	bash ./service.sh
 }
 
 function newClient() {

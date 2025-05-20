@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -67,8 +68,12 @@ type DeleteUserRequest struct {
 	Name string `json:"name"`
 }
 
-// Global params
-var wgParams WGParams
+// Global variables
+var (
+	wgParams WGParams
+	// Mutex to prevent concurrent WireGuard config modifications
+	wgConfigMutex sync.Mutex
+)
 
 // Auth middleware for Gin
 func authMiddleware() gin.HandlerFunc {
@@ -152,14 +157,13 @@ func main() {
 	router.GET("/api/users", listUsersHandlerGin)
 	router.POST("/api/users/add", addUserHandlerGin)
 	router.POST("/api/users/delete", deleteUserHandlerGin)
+	router.POST("/api/users/delete-all", deleteAllUsersHandlerGin)
 
 	// WireGuard status route
-	router.GET("/api/wireguard/status", wireGuardStatusHandlerGin)
-	
-	// WireGuard control routes
-	router.POST("/api/wireguard/start", wireGuardStartHandlerGin)
-	router.POST("/api/wireguard/stop", wireGuardStopHandlerGin)
-	router.POST("/api/wireguard/restart", wireGuardRestartHandlerGin)
+	router.GET("/api/status", wireGuardStatusHandlerGin)
+	router.POST("/api/start", wireGuardStartHandlerGin)
+	router.POST("/api/stop", wireGuardStopHandlerGin)
+	router.POST("/api/restart", wireGuardRestartHandlerGin)
 
 	// Start server
 	log.Printf("WireGuard API server running on port %s", API_PORT)
@@ -215,6 +219,11 @@ func loadWGParams() error {
 
 // Handler for listing all users
 func listUsersHandlerGin(c *gin.Context) {
+	// First sync deleted clients to ensure we remove any clients without config files
+	if err := syncDeletedClientsWithConfig(); err != nil {
+		log.Printf("Error syncing deleted clients: %v", err)
+	}
+	
 	clients, err := listWireGuardClients()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, APIResponse{
@@ -360,6 +369,154 @@ func deleteUserHandlerGin(c *gin.Context) {
 		Success: true,
 		Message: "Client deleted successfully",
 	})
+}
+
+// Handler for deleting all users
+func deleteAllUsersHandlerGin(c *gin.Context) {
+	// Step 1: Get a list of all clients (don't lock yet to avoid holding lock during potentially slow operations)
+	clients, err := listWireGuardClients()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to list clients: %v", err),
+		})
+		return
+	}
+	
+	// If no clients found, return success
+	if len(clients) == 0 {
+		c.JSON(http.StatusOK, APIResponse{
+			Success: true,
+			Message: "No clients found to delete",
+		})
+		return
+	}
+	
+	// Create a copy of client data for the response before we start deleting
+	clientsData := make([]Client, len(clients))
+	copy(clientsData, clients)
+	
+	// Now acquire the lock for the actual deletion operations
+	wgConfigMutex.Lock()
+	defer wgConfigMutex.Unlock()
+	
+	// Step 2: Delete all client config files from directory
+	deletedFiles, filesErr := removeAllClientFiles()
+	if filesErr != nil {
+		log.Printf("Warning: Error while deleting client files: %v", filesErr)
+		// Continue with next step - we'll try to remove from config anyway
+	}
+	
+	// Step 3: Remove all client entries from WireGuard config
+	configErr := removeAllClientsFromConfig()
+	if configErr != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to remove clients from config: %v", configErr),
+			Data: map[string]interface{}{
+				"deleted_files": deletedFiles,
+				"file_error": filesErr != nil,
+			},
+		})
+		return
+	}
+	
+	// Step 4: Sync changes with WireGuard to disconnect clients
+	syncErr := syncWireGuardConf()
+	if syncErr != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to sync WireGuard config: %v", syncErr),
+			Data: map[string]interface{}{
+				"deleted_files": deletedFiles,
+				"config_updated": true,
+			},
+		})
+		return
+	}
+	
+	// Success response
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Successfully deleted %d client(s)", len(clients)),
+		Data: map[string]interface{}{
+			"deleted_count": len(clients),
+			"clients": clientsData,
+			"files_deleted": deletedFiles,
+		},
+	})
+}
+
+// Remove all client config files from the WIREGUARD_CLIENTS directory
+// Returns a list of deleted files and any error encountered
+func removeAllClientFiles() ([]string, error) {
+	deletedFiles := []string{}
+	
+	// Check if directory exists
+	if _, err := os.Stat(WIREGUARD_CLIENTS); os.IsNotExist(err) {
+		return deletedFiles, nil // Directory doesn't exist, nothing to delete
+	}
+	
+	// Read all files in the directory
+	files, err := os.ReadDir(WIREGUARD_CLIENTS)
+	if err != nil {
+		return deletedFiles, fmt.Errorf("failed to read client directory: %v", err)
+	}
+	
+	// Delete all .conf files
+	var lastErr error
+	for _, file := range files {
+		if file.IsDir() {
+			continue // Skip directories
+		}
+		
+		if filepath.Ext(file.Name()) == ".conf" {
+			filePath := filepath.Join(WIREGUARD_CLIENTS, file.Name())
+			if err := os.Remove(filePath); err != nil {
+				log.Printf("Warning: Failed to delete file %s: %v", filePath, err)
+				lastErr = err // Store last error but continue with other files
+			} else {
+				deletedFiles = append(deletedFiles, file.Name())
+				if DEBUG_MODE {
+					log.Printf("Deleted client file: %s", filePath)
+				}
+			}
+		}
+	}
+	
+	return deletedFiles, lastErr
+}
+
+// Remove all client entries from WireGuard config file
+func removeAllClientsFromConfig() error {
+	// Read the WireGuard config file
+	content, err := os.ReadFile(WG_CONFIG_FILE)
+	if err != nil {
+		return fmt.Errorf("failed to read WireGuard config: %v", err)
+	}
+	
+	// Find the server configuration (everything before the first client)
+	clientMarkerIndex := strings.Index(string(content), "### Client ")
+	if clientMarkerIndex == -1 {
+		// No clients found, nothing to remove
+		return nil
+	}
+	
+	// Extract server config (everything before the first client marker)
+	serverConfig := string(content[:clientMarkerIndex])
+	
+	// Make sure the config ends with a newline
+	if !strings.HasSuffix(serverConfig, "\n") {
+		serverConfig += "\n"
+	}
+	
+	// Write the updated config back to the file
+	err = os.WriteFile(WG_CONFIG_FILE, []byte(serverConfig), 0600)
+	if err != nil {
+		return fmt.Errorf("failed to update WireGuard config: %v", err)
+	}
+	
+	return nil
 }
 
 // Get the next available IPv4 address
@@ -610,6 +767,9 @@ func fileExists(path string) bool {
 
 // Add a new WireGuard client
 func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
+	wgConfigMutex.Lock()
+	defer wgConfigMutex.Unlock()
+	
 	// Ensure the clients directory exists
 	err := os.MkdirAll(WIREGUARD_CLIENTS, 0700)
 	if err != nil {
@@ -720,6 +880,9 @@ AllowedIPs = %s
 
 // Delete a WireGuard client
 func deleteWireGuardClient(name string) error {
+	wgConfigMutex.Lock()
+	defer wgConfigMutex.Unlock()
+	
 	// Read the server config
 	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
@@ -878,8 +1041,116 @@ func syncWireGuardConf() error {
 	return nil
 }
 
+// Check if any clients in WireGuard config don't have corresponding config files and remove them
+func syncDeletedClientsWithConfig() error {
+	wgConfigMutex.Lock()
+	defer wgConfigMutex.Unlock()
+	
+	// Read the WireGuard config file
+	content, err := os.ReadFile(WG_CONFIG_FILE)
+	if err != nil {
+		return fmt.Errorf("failed to read WireGuard config: %v", err)
+	}
+	
+	// Extract client names from the config file
+	clientSectionRegex := regexp.MustCompile(`(?m)^### Client (.+)$`)
+	matches := clientSectionRegex.FindAllSubmatch(content, -1)
+	
+	configChanged := false
+	
+	// For each client in WireGuard config, check if its config file exists
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		
+		clientName := string(match[1])
+		
+		// Check if config file exists for this client using all possible naming patterns
+		if !clientConfigExists(clientName) {
+			log.Printf("Client %s config file is missing, removing from WireGuard config", clientName)
+			
+			// Remove client from WireGuard config file directly without calling deleteWireGuardClient
+			// to avoid potential circular dependencies
+			newContent, removed := removeClientFromConfig(content, clientName)
+			if removed {
+				// Write updated config back to file
+				err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
+				if err != nil {
+					log.Printf("Failed to update WireGuard config file: %v", err)
+					continue
+				}
+				configChanged = true
+			}
+		}
+	}
+	
+	// If we made changes to the config, apply them
+	if configChanged {
+		if err := syncWireGuardConf(); err != nil {
+			return fmt.Errorf("failed to sync WireGuard config: %v", err)
+		}
+	}
+	
+	return nil
+}
+
+// Remove client entry from WireGuard config directly without calling deleteWireGuardClient
+func removeClientFromConfig(content []byte, clientName string) ([]byte, bool) {
+	// Try all possible client name formats in the config
+	patterns := []string{
+		`(?ms)^### Client ` + regexp.QuoteMeta(clientName) + `$.*?^$`,
+		`(?ms)^### Client ` + regexp.QuoteMeta("wg0-client-" + clientName) + `$.*?^$`,
+		`(?ms)^### Client ` + regexp.QuoteMeta(wgParams.ServerWGNIC + "-client-" + clientName) + `$.*?^$`,
+	}
+	
+	originalSize := len(content)
+	var newContent []byte
+	removed := false
+	
+	for _, pattern := range patterns {
+		clientRegex := regexp.MustCompile(pattern)
+		if clientRegex.Match(content) {
+			newContent = clientRegex.ReplaceAll(content, []byte(""))
+			removed = true
+			break
+		}
+	}
+	
+	// If none of the patterns matched, return original content
+	if !removed {
+		return content, false
+	}
+	
+	// If the content changed, return the new content
+	if len(newContent) != originalSize {
+		return newContent, true
+	}
+	
+	return content, false
+}
+
+// Check if any config file exists for a client using all possible naming patterns
+func clientConfigExists(clientName string) bool {
+	// Make sure the client directory exists before checking files
+	if _, err := os.Stat(WIREGUARD_CLIENTS); os.IsNotExist(err) {
+		return false
+	}
+	
+	standardConfigPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+clientName+".conf")
+	alternativeConfigPath := filepath.Join(WIREGUARD_CLIENTS, "wg0-client-"+clientName+".conf")
+	simpleConfigPath := filepath.Join(WIREGUARD_CLIENTS, clientName+".conf")
+	
+	return fileExists(standardConfigPath) || fileExists(alternativeConfigPath) || fileExists(simpleConfigPath)
+}
+
 // WireGuard status handler - shows current status of the WireGuard server
 func wireGuardStatusHandlerGin(c *gin.Context) {
+	// Sync deleted clients first to ensure the server config is up to date
+	if err := syncDeletedClientsWithConfig(); err != nil && DEBUG_MODE {
+		log.Printf("Error syncing deleted clients: %v", err)
+	}
+	
 	// Check WireGuard installed
 	wgInstalled, _ := executeCommand("which", "wg")
 	wgQuickInstalled, _ := executeCommand("which", "wg-quick")
