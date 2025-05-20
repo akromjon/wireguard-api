@@ -168,6 +168,45 @@ paths:
         '404':
           description: Client not found
 
+  /api/users/delete-all:
+    post:
+      summary: Delete all WireGuard clients
+      description: Removes all WireGuard client configurations
+      operationId: deleteAllUsers
+      responses:
+        '200':
+          description: All clients deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Successfully deleted all clients
+                  data:
+                    type: object
+                    properties:
+                      deleted_count:
+                        type: integer
+                        example: 5
+                      clients:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Client'
+                      files_deleted:
+                        type: array
+                        items:
+                          type: string
+                          example: "client1.conf"
+        '401':
+          description: Unauthorized - Missing or invalid API token
+        '500':
+          description: Failed to delete all clients
+
   /api/wireguard/status:
     get:
       summary: Get WireGuard service status
