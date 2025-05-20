@@ -21,7 +21,7 @@ A REST API for managing WireGuard VPN users and configurations. This API allows 
 ### Using the Provided Installation Script
 Download and run our installation script that handles cloning the repository and running the installer:
 ```bash
-curl -sSL https://raw.githubusercontent.com/akromjon/vpn-go/main/install.sh -o install.sh
+curl -sSL https://raw.githubusercontent.com/akromjon/wireguard-api/main/install.sh -o install.sh
 chmod +x install.sh
 sudo ./install.sh
 ```
