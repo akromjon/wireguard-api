@@ -165,6 +165,9 @@ func main() {
 	router.POST("/api/stop", wireGuardStopHandlerGin)
 	router.POST("/api/restart", wireGuardRestartHandlerGin)
 
+	// udp2raw route
+	router.GET("/api/udp2raw", udp2rawInfoHandlerGin)
+
 	// Start server
 	log.Printf("WireGuard API server running on port %s", API_PORT)
 	log.Fatal(router.Run(":" + API_PORT))
@@ -1408,5 +1411,79 @@ func wireGuardRestartHandlerGin(c *gin.Context) {
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: "WireGuard service restarted successfully",
+	})
+}
+
+// udp2raw info handler - shows password and port from .env file
+func udp2rawInfoHandlerGin(c *gin.Context) {
+	envFile := "/etc/wireguard-api/.env"
+	
+	// Read .env file
+	file, err := os.Open(envFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to read .env file: %v", err),
+		})
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	envVars := make(map[string]string)
+	
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Skip comments and empty lines
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || strings.TrimSpace(line) == "" {
+			continue
+		}
+		
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			// Remove quotes if present
+			value = strings.Trim(value, "\"'")
+			envVars[key] = value
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("Error reading .env file: %v", err),
+		})
+		return
+	}
+
+	// Extract udp2raw password and port from .env
+	password := envVars["UDP2RAW_PASSWORD"]
+	udp2rawPort := envVars["UDP2RAW_PORT"]
+	
+	// Use default port if not found in .env
+	if udp2rawPort == "" {
+		udp2rawPort = "4096"
+	}
+
+	// Prepare response data
+	udp2rawData := map[string]interface{}{
+		"password": password,
+		"port":     udp2rawPort,
+	}
+
+	// If password is missing, return appropriate message
+	if password == "" {
+		c.JSON(http.StatusOK, APIResponse{
+			Success: false,
+			Message: "udp2raw password not found in .env file",
+			Data:    udp2rawData,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Data:    udp2rawData,
 	})
 }
