@@ -33,6 +33,23 @@ if ! command -v git &> /dev/null; then
     fi
 fi
 
+# Install wget if not already installed
+if ! command -v wget &> /dev/null; then
+    echo -e "${YELLOW}Wget not found. Installing wget...${NC}"
+    if command -v apt-get &> /dev/null; then
+        apt-get update && apt-get install -y wget
+    elif command -v yum &> /dev/null; then
+        yum install -y wget
+    elif command -v dnf &> /dev/null; then
+        dnf install -y wget
+    elif command -v apk &> /dev/null; then
+        apk add wget
+    else
+        echo -e "${RED}Could not install wget. Please install wget manually and try again.${NC}"
+        exit 1
+    fi
+fi
+
 # Create a temporary directory
 TEMP_DIR=$(mktemp -d)
 echo -e "${YELLOW}Cloning repository...${NC}"
@@ -49,8 +66,11 @@ fi
 # Navigate to the repository directory
 cd "$TEMP_DIR" || exit 1
 
-# Make the installer script executable
+# Make the installer scripts executable
 chmod +x wireguard-installer.sh
+if [ -f "./udp2raw-installer.sh" ]; then
+    chmod +x udp2raw-installer.sh
+fi
 
 # Run the installer script
 echo -e "${YELLOW}Running the installer script...${NC}"
@@ -59,6 +79,19 @@ if ./wireguard-installer.sh; then
 else
     echo -e "${RED}Installation failed.${NC}"
     exit 1
+fi
+
+# Install udp2raw if installer script exists
+if [ -f "./udp2raw-installer.sh" ]; then
+    echo -e "${YELLOW}Installing udp2raw...${NC}"
+    if ./udp2raw-installer.sh; then
+        echo -e "${GREEN}udp2raw installation completed successfully.${NC}"
+    else
+        echo -e "${RED}udp2raw installation failed.${NC}"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}udp2raw-installer.sh not found. Skipping udp2raw installation.${NC}"
 fi
 
 # Clean up
