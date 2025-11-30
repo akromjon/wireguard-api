@@ -15,6 +15,26 @@ fi
 echo -e "${GREEN}WireGuard API Installer${NC}"
 echo "This script will clone the WireGuard API repository and run the installer."
 echo ""
+echo "Please choose which VPN backend you want to install:"
+echo "  1) WireGuard"
+echo "  2) AmneziaWG"
+until [[ ${VPN_CHOICE} =~ ^[12]$ ]]; do
+    read -rp "Select an option [1-2]: " -e -i "2" VPN_CHOICE
+done
+
+case "${VPN_CHOICE}" in
+    1)
+        VPN_TYPE="wireguard"
+        INSTALLER_SCRIPT="wireguard-installer.sh"
+        ;;
+    2)
+        VPN_TYPE="amneziawg"
+        INSTALLER_SCRIPT="amneziawg-install.sh"
+        ;;
+esac
+
+echo -e "${GREEN}Selected: ${VPN_TYPE}${NC}"
+echo ""
 
 # Install git if not already installed
 if ! command -v git &> /dev/null; then
@@ -29,23 +49,6 @@ if ! command -v git &> /dev/null; then
         apk add git
     else
         echo -e "${RED}Could not install git. Please install git manually and try again.${NC}"
-        exit 1
-    fi
-fi
-
-# Install wget if not already installed
-if ! command -v wget &> /dev/null; then
-    echo -e "${YELLOW}Wget not found. Installing wget...${NC}"
-    if command -v apt-get &> /dev/null; then
-        apt-get update && apt-get install -y wget
-    elif command -v yum &> /dev/null; then
-        yum install -y wget
-    elif command -v dnf &> /dev/null; then
-        dnf install -y wget
-    elif command -v apk &> /dev/null; then
-        apk add wget
-    else
-        echo -e "${RED}Could not install wget. Please install wget manually and try again.${NC}"
         exit 1
     fi
 fi
@@ -66,32 +69,16 @@ fi
 # Navigate to the repository directory
 cd "$TEMP_DIR" || exit 1
 
-# Make the installer scripts executable
-chmod +x wireguard-installer.sh
-if [ -f "./udp2raw-installer.sh" ]; then
-    chmod +x udp2raw-installer.sh
-fi
+# Make the installer script executable
+chmod +x "$INSTALLER_SCRIPT"
 
 # Run the installer script
-echo -e "${YELLOW}Running the installer script...${NC}"
-if ./wireguard-installer.sh; then
+echo -e "${YELLOW}Running the ${VPN_TYPE} installer script...${NC}"
+if ./"$INSTALLER_SCRIPT"; then
     echo -e "${GREEN}Installation completed successfully.${NC}"
 else
     echo -e "${RED}Installation failed.${NC}"
     exit 1
-fi
-
-# Install udp2raw if installer script exists
-if [ -f "./udp2raw-installer.sh" ]; then
-    echo -e "${YELLOW}Installing udp2raw...${NC}"
-    if ./udp2raw-installer.sh; then
-        echo -e "${GREEN}udp2raw installation completed successfully.${NC}"
-    else
-        echo -e "${RED}udp2raw installation failed.${NC}"
-        exit 1
-    fi
-else
-    echo -e "${YELLOW}udp2raw-installer.sh not found. Skipping udp2raw installation.${NC}"
 fi
 
 # Clean up
