@@ -347,7 +347,7 @@ PostDown = iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE" >>
 	echo -e "\n${GREEN}Installing WireGuard API...${NC}"
 	bash ./service.sh
 	
-	# Write WireGuard port to .env file for udp2raw script
+	# Write WireGuard port to .env file
 	CONFIG_DIR="/etc/wireguard-api"
 	if [ -f "$CONFIG_DIR/.env" ]; then
 		# Add or update WG_PORT in .env file

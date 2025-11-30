@@ -313,4 +313,4 @@ paths:
         '401':
           description: Unauthorized - Missing or invalid API token
         '500':
-          description: Failed to restart the service 
+          description: Failed to restart the service
