@@ -179,12 +179,15 @@ func loadEnv() {
 	// Detect backend type (this will set WG_CONFIG_FILE and WG_PARAMS_FILE)
 	detectBackend()
 	
-	// Allow environment variables to override detected paths
-	if cfgFile := getEnv("WG_CONFIG_FILE", ""); cfgFile != "" {
-		WG_CONFIG_FILE = cfgFile
-	}
-	if paramsFile := getEnv("WG_PARAMS_FILE", ""); paramsFile != "" {
-		WG_PARAMS_FILE = paramsFile
+	// Allow environment variables to override detected paths ONLY if backend is WireGuard
+	// For AmneziaWG, always use detected paths to ensure correctness
+	if backendType == "wireguard" {
+		if cfgFile := getEnv("WG_CONFIG_FILE", ""); cfgFile != "" {
+			WG_CONFIG_FILE = cfgFile
+		}
+		if paramsFile := getEnv("WG_PARAMS_FILE", ""); paramsFile != "" {
+			WG_PARAMS_FILE = paramsFile
+		}
 	}
 }
 
