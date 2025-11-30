@@ -262,7 +262,15 @@ function installAmneziaWG() {
 		fi
 		apt install -y software-properties-common
 		add-apt-repository -y ppa:amnezia/ppa
-		apt install -y amneziawg amneziawg-tools qrencode
+		apt update
+		# Install DKMS and build tools if not already installed
+		apt install -y dkms build-essential linux-headers-$(uname -r)
+		# Try to install amneziawg-dkms if available, otherwise fall back to amneziawg
+		if apt-cache show amneziawg-dkms &>/dev/null; then
+			apt install -y amneziawg-dkms amneziawg-tools qrencode
+		else
+			apt install -y amneziawg amneziawg-tools qrencode
+		fi
 	elif [[ ${OS} == 'debian' ]]; then
 		if ! grep -q "^deb-src" /etc/apt/sources.list; then
 			cp /etc/apt/sources.list /etc/apt/sources.list.d/amneziawg.sources.list
@@ -272,7 +280,14 @@ function installAmneziaWG() {
 		echo "deb https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" >>/etc/apt/sources.list.d/amneziawg.sources.list
 		echo "deb-src https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" >>/etc/apt/sources.list.d/amneziawg.sources.list
 		apt update
-		apt install -y amneziawg amneziawg-tools qrencode iptables
+		# Install DKMS and build tools if not already installed
+		apt install -y dkms build-essential linux-headers-$(uname -r)
+		# Try to install amneziawg-dkms if available, otherwise fall back to amneziawg
+		if apt-cache show amneziawg-dkms &>/dev/null; then
+			apt install -y amneziawg-dkms amneziawg-tools qrencode iptables
+		else
+			apt install -y amneziawg amneziawg-tools qrencode iptables
+		fi
 	elif [[ ${OS} == 'fedora' ]]; then
 		dnf config-manager --set-enabled crb
 		dnf install -y epel-release
@@ -357,6 +372,52 @@ net.ipv6.conf.all.forwarding = 1" >/etc/sysctl.d/awg.conf
 
 	sysctl --system
 
+	# Try to build and load the AmneziaWG kernel module
+	echo -e "${YELLOW}Building and loading AmneziaWG kernel module...${NC}"
+	
+	# Check if DKMS module exists and build it if needed
+	if command -v dkms &>/dev/null; then
+		# Check if amneziawg module is registered in DKMS
+		if dkms status 2>/dev/null | grep -q amneziawg; then
+			echo -e "${YELLOW}Found AmneziaWG DKMS module, building for current kernel...${NC}"
+			# Get the module name and version from dkms status
+			DKMS_MODULE=$(dkms status 2>/dev/null | grep amneziawg | head -1 | awk '{print $1}' | tr -d ',')
+			if [[ -n "$DKMS_MODULE" ]]; then
+				# Build and install the module for current kernel
+				dkms install "$DKMS_MODULE" --force 2>&1 | grep -v "^$" || true
+			fi
+		fi
+	fi
+	
+	# Try to load the module
+	if modprobe amneziawg 2>/dev/null; then
+		echo -e "${GREEN}AmneziaWG kernel module loaded successfully${NC}"
+	else
+		echo -e "${ORANGE}Warning: Could not load AmneziaWG kernel module.${NC}"
+		echo -e "${ORANGE}Attempting to build module manually...${NC}"
+		
+		# Try to find and build the module source
+		if [[ -d /usr/src/amneziawg-* ]]; then
+			MODULE_DIR=$(ls -d /usr/src/amneziawg-* 2>/dev/null | head -1)
+			if [[ -n "$MODULE_DIR" ]] && [[ -f "$MODULE_DIR/dkms.conf" ]]; then
+				echo -e "${YELLOW}Found module source at $MODULE_DIR${NC}"
+				MODULE_NAME=$(grep "^PACKAGE_NAME=" "$MODULE_DIR/dkms.conf" | cut -d'=' -f2)
+				MODULE_VERSION=$(grep "^PACKAGE_VERSION=" "$MODULE_DIR/dkms.conf" | cut -d'=' -f2)
+				if [[ -n "$MODULE_NAME" ]] && [[ -n "$MODULE_VERSION" ]]; then
+					dkms add "$MODULE_NAME/$MODULE_VERSION" 2>&1 | grep -v "^$" || true
+					dkms build "$MODULE_NAME/$MODULE_VERSION" 2>&1 | grep -v "^$" || true
+					dkms install "$MODULE_NAME/$MODULE_VERSION" --force 2>&1 | grep -v "^$" || true
+					modprobe amneziawg 2>/dev/null && echo -e "${GREEN}Module built and loaded successfully${NC}" || true
+				fi
+			fi
+		fi
+		
+		if ! lsmod | grep -q amneziawg; then
+			echo -e "${RED}Failed to load kernel module. You may need to reboot the server.${NC}"
+			echo -e "${ORANGE}After reboot, run: sudo modprobe amneziawg${NC}"
+		fi
+	fi
+
 	systemctl start "awg-quick@${SERVER_AWG_NIC}"
 	systemctl enable "awg-quick@${SERVER_AWG_NIC}"
 
@@ -371,7 +432,47 @@ net.ipv6.conf.all.forwarding = 1" >/etc/sysctl.d/awg.conf
 	if [[ ${AWG_RUNNING} -ne 0 ]]; then
 		echo -e "\n${RED}WARNING: AmneziaWG does not seem to be running.${NC}"
 		echo -e "${ORANGE}You can check if AmneziaWG is running with: systemctl status awg-quick@${SERVER_AWG_NIC}${NC}"
-		echo -e "${ORANGE}If you get something like \"Cannot find device ${SERVER_AWG_NIC}\", please reboot!${NC}"
+		
+		# Check if kernel module is loaded
+		if lsmod | grep -q amneziawg; then
+			echo -e "${ORANGE}AmneziaWG kernel module is loaded, but service failed to start.${NC}"
+			echo -e "${ORANGE}Check the service logs: journalctl -u awg-quick@${SERVER_AWG_NIC} -n 50${NC}"
+		else
+			echo -e "${RED}AmneziaWG kernel module is NOT loaded!${NC}"
+			echo -e "${YELLOW}Attempting to build and load kernel module...${NC}"
+			
+			# Try to build DKMS module if available
+			if command -v dkms &>/dev/null; then
+				if dkms status 2>/dev/null | grep -q amneziawg; then
+					DKMS_MODULE=$(dkms status 2>/dev/null | grep amneziawg | head -1 | awk '{print $1}' | tr -d ',')
+					if [[ -n "$DKMS_MODULE" ]]; then
+						echo -e "${YELLOW}Building DKMS module: $DKMS_MODULE${NC}"
+						dkms install "$DKMS_MODULE" --force 2>&1 | grep -v "^$" || true
+					fi
+				fi
+			fi
+			
+			# Try to load the module
+			if modprobe amneziawg 2>/dev/null; then
+				echo -e "${GREEN}Kernel module loaded. Retrying service start...${NC}"
+				systemctl start "awg-quick@${SERVER_AWG_NIC}"
+				sleep 2
+				if systemctl is-active --quiet "awg-quick@${SERVER_AWG_NIC}"; then
+					echo -e "${GREEN}AmneziaWG started successfully after loading kernel module!${NC}"
+				else
+					echo -e "${RED}Service still failed. Check logs: journalctl -u awg-quick@${SERVER_AWG_NIC} -n 50${NC}"
+					echo -e "${ORANGE}You may need to reboot the server.${NC}"
+				fi
+			else
+				echo -e "${RED}Failed to load kernel module.${NC}"
+				echo -e "${YELLOW}Troubleshooting steps:${NC}"
+				echo -e "  1. Check DKMS status: dkms status | grep amneziawg"
+				echo -e "  2. Check if module source exists: ls -la /usr/src/ | grep amneziawg"
+				echo -e "  3. Install build tools: sudo apt install -y dkms build-essential linux-headers-$(uname -r)"
+				echo -e "  4. Try manual build: sudo dkms install amneziawg/<version> --force"
+				echo -e "  5. Reboot the server (DKMS modules often require a reboot)"
+			fi
+		fi
 	else # AmneziaWG is running
 		echo -e "\n${GREEN}AmneziaWG is running.${NC}"
 		echo -e "${GREEN}You can check the status of AmneziaWG with: systemctl status awg-quick@${SERVER_AWG_NIC}\n\n${NC}"
