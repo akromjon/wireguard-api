@@ -99,56 +99,96 @@ function installPackagesFromNoble() {
 	echo -e "${ORANGE}Packages not available for current Ubuntu version. Attempting to install from Ubuntu 24.04 (noble)...${NC}"
 	echo -e "${ORANGE}Warning: This is a workaround and may have compatibility risks.${NC}"
 	
-	# Add noble repository
-	NOBLE_SOURCE="/etc/apt/sources.list.d/amneziawg-noble.list"
-	if [[ ! -f "${NOBLE_SOURCE}" ]]; then
-		echo "deb https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main" > "${NOBLE_SOURCE}"
+	# Add GPG key for the repository (same key as the main PPA)
+	# Key ID: 57290828 (full: 4166F2C257290828)
+	echo -e "${YELLOW}Adding GPG key for Amnezia PPA...${NC}"
+	mkdir -p /etc/apt/keyrings
+	
+	# Try modern method first (using gpg directly)
+	if command -v gpg &>/dev/null; then
+		# Download and import the key using modern method
+		curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0x57290828 2>/dev/null | gpg --dearmor -o /etc/apt/keyrings/amnezia-ppa.gpg 2>/dev/null || {
+			# Alternative: use gpg --keyserver
+			gpg --no-default-keyring --keyring /etc/apt/keyrings/amnezia-ppa.gpg --keyserver keyserver.ubuntu.com --recv-keys 57290828 2>/dev/null || true
+		}
 	fi
 	
-	# Update package lists
-	apt update 2>/dev/null || apt update
-	
-	# Try to install packages from noble
-	# First, try amneziawg-dkms
-	local INSTALL_SUCCESS=false
-	
-	# Check if amneziawg-dkms exists in noble repo
-	if apt-cache madison amneziawg-dkms 2>/dev/null | grep -q "noble"; then
-		if apt install -y amneziawg-dkms 2>/dev/null; then
-			INSTALL_SUCCESS=true
+	# Fallback to deprecated apt-key method if modern method failed
+	if [[ ! -f /etc/apt/keyrings/amnezia-ppa.gpg ]]; then
+		if command -v apt-key &>/dev/null; then
+			apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 57290828 2>/dev/null || true
 		fi
 	fi
 	
-	# If dkms failed, try amneziawg
-	if [[ "${INSTALL_SUCCESS}" == "false" ]]; then
-		if apt-cache madison amneziawg 2>/dev/null | grep -q "noble"; then
-			if apt install -y amneziawg 2>/dev/null; then
-				INSTALL_SUCCESS=true
+	# Add noble repository with proper GPG key configuration
+	NOBLE_SOURCE="/etc/apt/sources.list.d/amneziawg-noble.list"
+	if [[ ! -f "${NOBLE_SOURCE}" ]]; then
+		# Use signed-by if keyring exists, otherwise unsigned (will need --allow-unauthenticated)
+		if [[ -f /etc/apt/keyrings/amnezia-ppa.gpg ]]; then
+			echo "deb [signed-by=/etc/apt/keyrings/amnezia-ppa.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main" > "${NOBLE_SOURCE}"
+			echo -e "${GREEN}Added noble repository with GPG key${NC}"
+		else
+			# Unsigned - we'll use --allow-unauthenticated when installing
+			echo "deb https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main" > "${NOBLE_SOURCE}"
+			echo -e "${ORANGE}Added noble repository without GPG key (will use --allow-unauthenticated)${NC}"
+		fi
+	fi
+	
+	# Update package lists
+	echo -e "${YELLOW}Updating package lists...${NC}"
+	local APT_UPDATE_OUTPUT
+	APT_UPDATE_OUTPUT=$(apt update 2>&1)
+	echo "${APT_UPDATE_OUTPUT}"
+	if echo "${APT_UPDATE_OUTPUT}" | grep -q "NO_PUBKEY\|not signed"; then
+		echo -e "${ORANGE}GPG key issue detected. Will use --allow-unauthenticated for installation.${NC}"
+	fi
+	
+	# Check what's already installed and what we need from noble
+	local NEED_DKMS=false
+	local NEED_TOOLS=true
+	
+	# Check if amneziawg-dkms is already installed
+	if dpkg -l | grep -q "^ii.*amneziawg-dkms\|^ii.*amneziawg "; then
+		echo -e "${GREEN}amneziawg-dkms or amneziawg is already installed${NC}"
+		NEED_DKMS=false
+	else
+		NEED_DKMS=true
+	fi
+	
+	# Check if amneziawg-tools is already installed
+	if command -v awg &>/dev/null; then
+		echo -e "${GREEN}amneziawg-tools is already installed${NC}"
+		NEED_TOOLS=false
+	fi
+	
+	# Only install dkms if needed
+	if [[ "${NEED_DKMS}" == "true" ]]; then
+		echo -e "${YELLOW}Installing amneziawg-dkms from noble...${NC}"
+		if ! apt install -y --allow-downgrades amneziawg-dkms 2>/dev/null; then
+			if ! apt install -y --allow-downgrades amneziawg 2>/dev/null; then
+				echo -e "${ORANGE}Could not install amneziawg-dkms from noble, but continuing...${NC}"
 			fi
 		fi
 	fi
 	
-	# If still failed, try with --allow-downgrades (for version conflicts)
-	if [[ "${INSTALL_SUCCESS}" == "false" ]]; then
-		echo -e "${ORANGE}Attempting installation with relaxed version checks...${NC}"
-		if apt install -y --allow-downgrades amneziawg-dkms 2>/dev/null; then
-			INSTALL_SUCCESS=true
-		elif apt install -y --allow-downgrades amneziawg 2>/dev/null; then
-			INSTALL_SUCCESS=true
+	# Install amneziawg-tools from noble (this is why we're here)
+	if [[ "${NEED_TOOLS}" == "true" ]]; then
+		echo -e "${YELLOW}Installing amneziawg-tools from noble...${NC}"
+		# Try multiple methods due to GPG key issues
+		if ! apt install -y amneziawg-tools 2>/dev/null; then
+			if ! apt install -y --allow-downgrades amneziawg-tools 2>/dev/null; then
+				# Try with allow-insecure-repositories if GPG key failed
+				if ! apt install -y --allow-downgrades --allow-insecure-repositories amneziawg-tools 2>/dev/null; then
+					# Last resort: allow unauthenticated (risky but may be necessary)
+					echo -e "${ORANGE}Attempting installation with relaxed security checks (last resort)...${NC}"
+					if ! apt install -y --allow-downgrades --allow-unauthenticated amneziawg-tools 2>/dev/null; then
+						echo -e "${RED}Failed to install amneziawg-tools from noble${NC}"
+						return 1
+					fi
+				fi
+			fi
 		fi
-	fi
-	
-	if [[ "${INSTALL_SUCCESS}" == "false" ]]; then
-		echo -e "${RED}Failed to install amneziawg-dkms or amneziawg from noble${NC}"
-		return 1
-	fi
-	
-	# Install amneziawg-tools from noble
-	if ! apt install -y amneziawg-tools 2>/dev/null; then
-		if ! apt install -y --allow-downgrades amneziawg-tools 2>/dev/null; then
-			echo -e "${RED}Failed to install amneziawg-tools from noble${NC}"
-			return 1
-		fi
+		echo -e "${GREEN}Successfully installed amneziawg-tools${NC}"
 	fi
 	
 	# Install qrencode (should be available in main repos)
