@@ -5,6 +5,7 @@
 
 RED='\033[0;31m'
 ORANGE='\033[0;33m'
+YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
@@ -83,6 +84,78 @@ function getHomeDirForClient() {
 	HOME_DIR="/home/wireguard/users"
 
 	echo "$HOME_DIR"
+}
+
+function checkPackageAvailability() {
+	local PACKAGE_NAME=$1
+	if apt-cache show "${PACKAGE_NAME}" &>/dev/null; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+function installPackagesFromNoble() {
+	echo -e "${ORANGE}Packages not available for current Ubuntu version. Attempting to install from Ubuntu 24.04 (noble)...${NC}"
+	echo -e "${ORANGE}Warning: This is a workaround and may have compatibility risks.${NC}"
+	
+	# Add noble repository
+	NOBLE_SOURCE="/etc/apt/sources.list.d/amneziawg-noble.list"
+	if [[ ! -f "${NOBLE_SOURCE}" ]]; then
+		echo "deb https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main" > "${NOBLE_SOURCE}"
+	fi
+	
+	# Update package lists
+	apt update 2>/dev/null || apt update
+	
+	# Try to install packages from noble
+	# First, try amneziawg-dkms
+	local INSTALL_SUCCESS=false
+	
+	# Check if amneziawg-dkms exists in noble repo
+	if apt-cache madison amneziawg-dkms 2>/dev/null | grep -q "noble"; then
+		if apt install -y amneziawg-dkms 2>/dev/null; then
+			INSTALL_SUCCESS=true
+		fi
+	fi
+	
+	# If dkms failed, try amneziawg
+	if [[ "${INSTALL_SUCCESS}" == "false" ]]; then
+		if apt-cache madison amneziawg 2>/dev/null | grep -q "noble"; then
+			if apt install -y amneziawg 2>/dev/null; then
+				INSTALL_SUCCESS=true
+			fi
+		fi
+	fi
+	
+	# If still failed, try with --allow-downgrades (for version conflicts)
+	if [[ "${INSTALL_SUCCESS}" == "false" ]]; then
+		echo -e "${ORANGE}Attempting installation with relaxed version checks...${NC}"
+		if apt install -y --allow-downgrades amneziawg-dkms 2>/dev/null; then
+			INSTALL_SUCCESS=true
+		elif apt install -y --allow-downgrades amneziawg 2>/dev/null; then
+			INSTALL_SUCCESS=true
+		fi
+	fi
+	
+	if [[ "${INSTALL_SUCCESS}" == "false" ]]; then
+		echo -e "${RED}Failed to install amneziawg-dkms or amneziawg from noble${NC}"
+		return 1
+	fi
+	
+	# Install amneziawg-tools from noble
+	if ! apt install -y amneziawg-tools 2>/dev/null; then
+		if ! apt install -y --allow-downgrades amneziawg-tools 2>/dev/null; then
+			echo -e "${RED}Failed to install amneziawg-tools from noble${NC}"
+			return 1
+		fi
+	fi
+	
+	# Install qrencode (should be available in main repos)
+	apt install -y qrencode || true
+	
+	echo -e "${GREEN}Successfully installed packages from Ubuntu 24.04 (noble)${NC}"
+	return 0
 }
 
 function initialCheck() {
@@ -265,11 +338,42 @@ function installAmneziaWG() {
 		apt update
 		# Install DKMS and build tools if not already installed
 		apt install -y dkms build-essential linux-headers-$(uname -r)
-		# Try to install amneziawg-dkms if available, otherwise fall back to amneziawg
-		if apt-cache show amneziawg-dkms &>/dev/null; then
-			apt install -y amneziawg-dkms amneziawg-tools qrencode
-		else
-			apt install -y amneziawg amneziawg-tools qrencode
+		
+		# Check if packages are available for current Ubuntu version
+		PACKAGES_AVAILABLE=true
+		if ! checkPackageAvailability "amneziawg-tools"; then
+			PACKAGES_AVAILABLE=false
+			echo -e "${ORANGE}amneziawg-tools not available for current Ubuntu version${NC}"
+		fi
+		
+		# Try to install packages
+		if [[ "${PACKAGES_AVAILABLE}" == "true" ]]; then
+			# Try to install amneziawg-dkms if available, otherwise fall back to amneziawg
+			if checkPackageAvailability "amneziawg-dkms"; then
+				if ! apt install -y amneziawg-dkms amneziawg-tools qrencode; then
+					echo -e "${ORANGE}Failed to install packages. Trying fallback to Ubuntu 24.04...${NC}"
+					PACKAGES_AVAILABLE=false
+				fi
+			else
+				if ! apt install -y amneziawg amneziawg-tools qrencode; then
+					echo -e "${ORANGE}Failed to install packages. Trying fallback to Ubuntu 24.04...${NC}"
+					PACKAGES_AVAILABLE=false
+				fi
+			fi
+		fi
+		
+		# If packages not available or installation failed, try installing from Ubuntu 24.04 (noble)
+		if [[ "${PACKAGES_AVAILABLE}" == "false" ]]; then
+			if ! installPackagesFromNoble; then
+				echo -e "${RED}Failed to install AmneziaWG packages. Installation cannot continue.${NC}"
+				exit 1
+			fi
+		fi
+		
+		# Verify installation
+		if ! command -v awg &>/dev/null; then
+			echo -e "${RED}Error: awg command not found after installation. Installation failed.${NC}"
+			exit 1
 		fi
 	elif [[ ${OS} == 'debian' ]]; then
 		if ! grep -q "^deb-src" /etc/apt/sources.list; then
@@ -299,6 +403,10 @@ function installAmneziaWG() {
 		dnf copr enable -y amneziavpn/amneziawg
 		dnf install -y amneziawg-dkms amneziawg-tools qrencode iptables
 	fi
+
+	# Create AmneziaWG directory if it doesn't exist
+	mkdir -p "${AMNEZIAWG_DIR}"
+	chmod 700 "${AMNEZIAWG_DIR}"
 
 	SERVER_AWG_CONF="${AMNEZIAWG_DIR}/${SERVER_AWG_NIC}.conf"
 
