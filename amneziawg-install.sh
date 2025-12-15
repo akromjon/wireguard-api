@@ -134,13 +134,41 @@ function installPackagesFromNoble() {
 		fi
 	fi
 	
-	# Update package lists
+	# Update package lists - force update even if repository is unsigned
 	echo -e "${YELLOW}Updating package lists...${NC}"
 	local APT_UPDATE_OUTPUT
+	local GPG_ISSUE=false
+	
+	# Try normal update first
 	APT_UPDATE_OUTPUT=$(apt update 2>&1)
 	echo "${APT_UPDATE_OUTPUT}"
+	
+	# Check if GPG key issue occurred
 	if echo "${APT_UPDATE_OUTPUT}" | grep -q "NO_PUBKEY\|not signed"; then
-		echo -e "${ORANGE}GPG key issue detected. Will use --allow-unauthenticated for installation.${NC}"
+		GPG_ISSUE=true
+		echo -e "${ORANGE}GPG key issue detected. Forcing update with --allow-insecure-repositories...${NC}"
+		
+		# Force update with insecure repositories flag
+		APT_UPDATE_OUTPUT=$(apt update --allow-insecure-repositories 2>&1)
+		echo "${APT_UPDATE_OUTPUT}"
+		
+		# If still failing, try with Acquire::AllowInsecureRepositories
+		if echo "${APT_UPDATE_OUTPUT}" | grep -q "not signed\|NO_PUBKEY"; then
+			echo -e "${ORANGE}Using apt configuration workaround...${NC}"
+			# Create temporary apt config to allow insecure repos
+			mkdir -p /etc/apt/apt.conf.d
+			echo 'Acquire::AllowInsecureRepositories "true";' > /etc/apt/apt.conf.d/99allow-insecure-temp.conf
+			echo 'APT::Get::AllowUnauthenticated "true";' >> /etc/apt/apt.conf.d/99allow-insecure-temp.conf
+			APT_UPDATE_OUTPUT=$(apt update 2>&1)
+			echo "${APT_UPDATE_OUTPUT}"
+			
+			# Verify update succeeded (check if we got packages from noble)
+			if echo "${APT_UPDATE_OUTPUT}" | grep -q "noble.*InRelease\|Get:.*noble"; then
+				echo -e "${GREEN}Successfully updated package lists from noble repository${NC}"
+			else
+				echo -e "${ORANGE}Warning: Package list update may not have included noble repository${NC}"
+			fi
+		fi
 	fi
 	
 	# Check what's already installed and what we need from noble
@@ -174,22 +202,64 @@ function installPackagesFromNoble() {
 	# Install amneziawg-tools from noble (this is why we're here)
 	if [[ "${NEED_TOOLS}" == "true" ]]; then
 		echo -e "${YELLOW}Installing amneziawg-tools from noble...${NC}"
-		# Try multiple methods due to GPG key issues
-		if ! apt install -y amneziawg-tools 2>/dev/null; then
-			if ! apt install -y --allow-downgrades amneziawg-tools 2>/dev/null; then
-				# Try with allow-insecure-repositories if GPG key failed
-				if ! apt install -y --allow-downgrades --allow-insecure-repositories amneziawg-tools 2>/dev/null; then
-					# Last resort: allow unauthenticated (risky but may be necessary)
-					echo -e "${ORANGE}Attempting installation with relaxed security checks (last resort)...${NC}"
-					if ! apt install -y --allow-downgrades --allow-unauthenticated amneziawg-tools 2>/dev/null; then
-						echo -e "${RED}Failed to install amneziawg-tools from noble${NC}"
-						return 1
-					fi
-				fi
+		
+		# Check if package is available in noble repository
+		echo -e "${YELLOW}Checking package availability...${NC}"
+		local PACKAGE_FOUND=false
+		if apt-cache madison amneziawg-tools 2>/dev/null | grep -q "noble"; then
+			echo -e "${GREEN}Found amneziawg-tools in noble repository${NC}"
+			PACKAGE_FOUND=true
+		else
+			echo -e "${ORANGE}amneziawg-tools not found in noble repository. Checking all sources...${NC}"
+			local ALL_SOURCES
+			ALL_SOURCES=$(apt-cache madison amneziawg-tools 2>/dev/null)
+			if [[ -n "${ALL_SOURCES}" ]]; then
+				echo "${ALL_SOURCES}"
+				echo -e "${YELLOW}Package found in other repositories, will attempt installation...${NC}"
+				PACKAGE_FOUND=true
+			else
+				echo -e "${RED}Package amneziawg-tools not found in any repository${NC}"
+				echo -e "${ORANGE}This may mean the package list wasn't updated properly or the package doesn't exist.${NC}"
 			fi
 		fi
+		
+		if [[ "${PACKAGE_FOUND}" == "false" ]]; then
+			# Clean up temporary apt config
+			rm -f /etc/apt/apt.conf.d/99allow-insecure-temp.conf 2>/dev/null || true
+			return 1
+		fi
+		
+		# Try multiple installation methods due to GPG key issues
+		local INSTALL_SUCCESS=false
+		
+		# Method 1: Normal installation
+		if apt install -y amneziawg-tools 2>/dev/null; then
+			INSTALL_SUCCESS=true
+		# Method 2: With allow-downgrades
+		elif apt install -y --allow-downgrades amneziawg-tools 2>/dev/null; then
+			INSTALL_SUCCESS=true
+		# Method 3: With allow-insecure-repositories
+		elif [[ "${GPG_ISSUE}" == "true" ]]; then
+			if apt install -y --allow-downgrades --allow-insecure-repositories amneziawg-tools 2>/dev/null; then
+				INSTALL_SUCCESS=true
+			# Method 4: With allow-unauthenticated (last resort)
+			elif apt install -y --allow-downgrades --allow-unauthenticated amneziawg-tools 2>/dev/null; then
+				INSTALL_SUCCESS=true
+			fi
+		fi
+		
+		if [[ "${INSTALL_SUCCESS}" == "false" ]]; then
+			echo -e "${RED}Failed to install amneziawg-tools from noble${NC}"
+			# Clean up temporary apt config
+			rm -f /etc/apt/apt.conf.d/99allow-insecure-temp.conf 2>/dev/null || true
+			return 1
+		fi
+		
 		echo -e "${GREEN}Successfully installed amneziawg-tools${NC}"
 	fi
+	
+	# Clean up temporary apt config
+	rm -f /etc/apt/apt.conf.d/99allow-insecure-temp.conf 2>/dev/null || true
 	
 	# Install qrencode (should be available in main repos)
 	apt install -y qrencode || true
