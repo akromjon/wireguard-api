@@ -52,6 +52,7 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &> /dev/null; then
 # Wireguard API Configuration
 PORT=8080
 WG_CONFIG_DIR=/etc/wireguard
+API_PORT=8080
 # Add other environment variables as needed
 EOF
       echo "Created default .env file"
@@ -83,6 +84,11 @@ EOF
       API_TOKEN=$(grep "^API_TOKEN=" "$CONFIG_DIR/.env" | cut -d= -f2)
       echo -e "\033[0;32mExisting API Token: $API_TOKEN\033[0m"
     fi
+  fi
+
+  # Ensure API_PORT is explicit for the Go API and provisioning payloads.
+  if ! grep -q "^API_PORT=" "$CONFIG_DIR/.env"; then
+    echo "API_PORT=8080" >> "$CONFIG_DIR/.env"
   fi
   
   # Copy wireguard.service file to systemd directory
@@ -141,6 +147,70 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &> /dev/null; then
 fi
 
 echo "wireguard V1 is successfully installed"
+
+register_with_vipn_master() {
+  if [[ ! -f "$CONFIG_DIR/.env" ]]; then
+    return
+  fi
+
+  read -rp "Register this node with VIPN master? [Y/n]: " REGISTER_WITH_MASTER
+  REGISTER_WITH_MASTER=${REGISTER_WITH_MASTER:-Y}
+  if [[ ! ${REGISTER_WITH_MASTER} =~ ^[Yy]$ ]]; then
+    echo "Skipping VIPN master registration. You can still add this server manually."
+    return
+  fi
+
+  read -rp "Enter VIPN master API URL [https://api.vipn.io]: " MASTER_URL
+  MASTER_URL=${MASTER_URL:-https://api.vipn.io}
+  MASTER_URL=${MASTER_URL%/}
+
+  read -rsp "Enter VIPN master provisioning token: " MASTER_TOKEN
+  echo ""
+  if [[ -z "$MASTER_TOKEN" ]]; then
+    echo "VIPN master provisioning token is empty. Skipping registration."
+    return
+  fi
+
+  API_PORT=$(grep "^API_PORT=" "$CONFIG_DIR/.env" | cut -d= -f2 || true)
+  API_PORT=${API_PORT:-8080}
+  API_TOKEN=$(grep "^API_TOKEN=" "$CONFIG_DIR/.env" | cut -d= -f2 || true)
+  if [[ -z "$API_TOKEN" ]]; then
+    echo "API_TOKEN not found in $CONFIG_DIR/.env. Skipping VIPN master registration."
+    return
+  fi
+
+  PUBLIC_IP=$(curl -fsS --max-time 5 https://api.ipify.org || true)
+  if [[ -z "$PUBLIC_IP" ]]; then
+    PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+  fi
+  if [[ -z "$PUBLIC_IP" ]]; then
+    echo "Could not detect public IP. Skipping VIPN master registration."
+    return
+  fi
+
+  VPN_TYPE="wireguard"
+  if command -v awg &> /dev/null || [[ -f "/etc/amnezia/amneziawg/params" ]]; then
+    VPN_TYPE="amneziawg"
+  fi
+
+  REGISTER_PAYLOAD=$(printf '{"ip":"%s","port":%s,"api_key":"%s","vpn_type":"%s"}' "$PUBLIC_IP" "$API_PORT" "$API_TOKEN" "$VPN_TYPE")
+
+  echo "Registering this node with VIPN master..."
+  if curl -fsS \
+    -H "Authorization: Bearer $MASTER_TOKEN" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    -d "$REGISTER_PAYLOAD" \
+    "$MASTER_URL/master-api/register-node"; then
+    echo ""
+    echo -e "\033[0;32mVIPN master registration completed.\033[0m"
+  else
+    echo ""
+    echo "VIPN master registration failed. You can still add this server manually using the API token below."
+  fi
+}
+
+register_with_vipn_master
 
 # Display API access information
 if [[ -f "$CONFIG_DIR/.env" ]]; then
