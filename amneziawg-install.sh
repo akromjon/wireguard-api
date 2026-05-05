@@ -447,7 +447,7 @@ function installAmneziaWG() {
 		add-apt-repository -y ppa:amnezia/ppa
 		apt update
 		# Install DKMS and build tools if not already installed
-		apt install -y dkms build-essential linux-headers-$(uname -r)
+		apt install -y dkms build-essential "linux-headers-$(uname -r)"
 		
 		# Check if packages are available for current Ubuntu version
 		PACKAGES_AVAILABLE=true
@@ -495,7 +495,7 @@ function installAmneziaWG() {
 		echo "deb-src https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" >>/etc/apt/sources.list.d/amneziawg.sources.list
 		apt update
 		# Install DKMS and build tools if not already installed
-		apt install -y dkms build-essential linux-headers-$(uname -r)
+		apt install -y dkms build-essential "linux-headers-$(uname -r)"
 		# Try to install amneziawg-dkms if available, otherwise fall back to amneziawg
 		if apt-cache show amneziawg-dkms &>/dev/null; then
 			apt install -y amneziawg-dkms amneziawg-tools qrencode iptables
@@ -615,9 +615,9 @@ net.ipv6.conf.all.forwarding = 1" >/etc/sysctl.d/awg.conf
 		echo -e "${ORANGE}Attempting to build module manually...${NC}"
 		
 		# Try to find and build the module source
-		if [[ -d /usr/src/amneziawg-* ]]; then
-			MODULE_DIR=$(ls -d /usr/src/amneziawg-* 2>/dev/null | head -1)
-			if [[ -n "$MODULE_DIR" ]] && [[ -f "$MODULE_DIR/dkms.conf" ]]; then
+		MODULE_DIR=$(find /usr/src -maxdepth 1 -type d -name 'amneziawg-*' -print -quit 2>/dev/null)
+		if [[ -n "$MODULE_DIR" ]]; then
+			if [[ -f "$MODULE_DIR/dkms.conf" ]]; then
 				echo -e "${YELLOW}Found module source at $MODULE_DIR${NC}"
 				MODULE_NAME=$(grep "^PACKAGE_NAME=" "$MODULE_DIR/dkms.conf" | cut -d'=' -f2)
 				MODULE_VERSION=$(grep "^PACKAGE_VERSION=" "$MODULE_DIR/dkms.conf" | cut -d'=' -f2)
@@ -890,7 +890,7 @@ function uninstallAmneziaWG() {
 		sysctl --system
 
 		# Remove config files
-		rm -rf ${AMNEZIAWG_DIR}/*
+		rm -rf "${AMNEZIAWG_DIR:?}"/*
 
 		if [[ ${OS} == 'ubuntu' ]]; then
 			apt remove -y amneziawg amneziawg-tools

@@ -29,11 +29,16 @@ add_firewall_rule() {
 append_smtp_block_to_vpn_config() {
     local VPN_CONFIG_FILE=$1
     local VPN_INTERFACE=$2
+    local SMTP_BLOCK_FILE
+    local TMP_CONFIG
+    local CLEAN_CONFIG=""
+    local SOURCE_CONFIG="$VPN_CONFIG_FILE"
 
-    if grep -q "^# VIPN outbound SMTP block$" "$VPN_CONFIG_FILE"; then
-        echo -e "${YELLOW}Outbound SMTP block already exists in ${VPN_CONFIG_FILE}.${NC}"
-        return 0
-    fi
+    SMTP_BLOCK_FILE=$(mktemp) || return 1
+    TMP_CONFIG=$(mktemp) || {
+        rm -f "$SMTP_BLOCK_FILE"
+        return 1
+    }
 
     {
         echo ""
@@ -48,7 +53,58 @@ append_smtp_block_to_vpn_config() {
             echo "PostDown = command -v ip6tables >/dev/null && ip6tables -D FORWARD -i ${VPN_INTERFACE} -p tcp --dport ${PORT} -j REJECT 2>/dev/null || true"
             echo "PostDown = command -v ip6tables >/dev/null && ip6tables -D OUTPUT -p tcp --dport ${PORT} -j REJECT 2>/dev/null || true"
         done
-    } >> "$VPN_CONFIG_FILE"
+    } > "$SMTP_BLOCK_FILE"
+
+    if grep -q "^# VIPN outbound SMTP block$" "$VPN_CONFIG_FILE"; then
+        echo -e "${YELLOW}Refreshing outbound SMTP block in ${VPN_CONFIG_FILE}.${NC}"
+        CLEAN_CONFIG=$(mktemp) || {
+            rm -f "$SMTP_BLOCK_FILE" "$TMP_CONFIG"
+            return 1
+        }
+
+        if ! awk '
+            /^# VIPN outbound SMTP block$/ {
+                skipping = 1
+                next
+            }
+            skipping && /^Post(Up|Down) = command -v ip6?tables / {
+                next
+            }
+            {
+                skipping = 0
+                print
+            }
+        ' "$VPN_CONFIG_FILE" > "$CLEAN_CONFIG"; then
+            rm -f "$SMTP_BLOCK_FILE" "$TMP_CONFIG" "$CLEAN_CONFIG"
+            return 1
+        fi
+        SOURCE_CONFIG=$CLEAN_CONFIG
+    fi
+
+    if ! awk -v block_file="$SMTP_BLOCK_FILE" '
+        BEGIN {
+            while ((getline line < block_file) > 0) {
+                block = block line ORS
+            }
+            inserted = 0
+        }
+        !inserted && /^\[Peer\]$/ {
+            printf "%s", block
+            inserted = 1
+        }
+        { print }
+        END {
+            if (!inserted) {
+                printf "%s", block
+            }
+        }
+    ' "$SOURCE_CONFIG" > "$TMP_CONFIG"; then
+        rm -f "$SMTP_BLOCK_FILE" "$TMP_CONFIG" "$CLEAN_CONFIG"
+        return 1
+    fi
+
+    cp "$TMP_CONFIG" "$VPN_CONFIG_FILE"
+    rm -f "$SMTP_BLOCK_FILE" "$TMP_CONFIG" "$CLEAN_CONFIG"
 }
 
 configure_outbound_smtp_block() {
