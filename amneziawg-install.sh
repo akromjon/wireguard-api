@@ -261,9 +261,6 @@ function installPackagesFromNoble() {
 	# Clean up temporary apt config
 	rm -f /etc/apt/apt.conf.d/99allow-insecure-temp.conf 2>/dev/null || true
 	
-	# Install qrencode (should be available in main repos)
-	apt install -y qrencode || true
-	
 	echo -e "${GREEN}Successfully installed packages from Ubuntu 24.04 (noble)${NC}"
 	return 0
 }
@@ -422,7 +419,7 @@ function installQuestions() {
 
 	echo ""
 	echo "Okay, that was all I needed. We are ready to setup your AmneziaWG server now."
-	echo "You will be able to generate a client at the end of the installation."
+	echo "Client configurations will be managed by the WireGuard API after installation."
 	read -n1 -r -p "Press any key to continue..."
 }
 
@@ -460,12 +457,12 @@ function installAmneziaWG() {
 		if [[ "${PACKAGES_AVAILABLE}" == "true" ]]; then
 			# Try to install amneziawg-dkms if available, otherwise fall back to amneziawg
 			if checkPackageAvailability "amneziawg-dkms"; then
-				if ! apt install -y amneziawg-dkms amneziawg-tools qrencode; then
+				if ! apt install -y amneziawg-dkms amneziawg-tools; then
 					echo -e "${ORANGE}Failed to install packages. Trying fallback to Ubuntu 24.04...${NC}"
 					PACKAGES_AVAILABLE=false
 				fi
 			else
-				if ! apt install -y amneziawg amneziawg-tools qrencode; then
+				if ! apt install -y amneziawg amneziawg-tools; then
 					echo -e "${ORANGE}Failed to install packages. Trying fallback to Ubuntu 24.04...${NC}"
 					PACKAGES_AVAILABLE=false
 				fi
@@ -498,20 +495,20 @@ function installAmneziaWG() {
 		apt install -y dkms build-essential "linux-headers-$(uname -r)"
 		# Try to install amneziawg-dkms if available, otherwise fall back to amneziawg
 		if apt-cache show amneziawg-dkms &>/dev/null; then
-			apt install -y amneziawg-dkms amneziawg-tools qrencode iptables
+			apt install -y amneziawg-dkms amneziawg-tools iptables
 		else
-			apt install -y amneziawg amneziawg-tools qrencode iptables
+			apt install -y amneziawg amneziawg-tools iptables
 		fi
 	elif [[ ${OS} == 'fedora' ]]; then
 		dnf config-manager --set-enabled crb
 		dnf install -y epel-release
 		dnf copr enable -y amneziavpn/amneziawg
-		dnf install -y amneziawg-dkms amneziawg-tools qrencode iptables
+		dnf install -y amneziawg-dkms amneziawg-tools iptables
 	elif [[ ${OS} == 'centos' ]] || [[ ${OS} == 'almalinux' ]] || [[ ${OS} == 'rocky' ]]; then
 		dnf config-manager --set-enabled crb
 		dnf install -y epel-release
 		dnf copr enable -y amneziavpn/amneziawg
-		dnf install -y amneziawg-dkms amneziawg-tools qrencode iptables
+		dnf install -y amneziawg-dkms amneziawg-tools iptables
 	fi
 
 	# Create AmneziaWG directory if it doesn't exist
@@ -639,8 +636,7 @@ net.ipv6.conf.all.forwarding = 1" >/etc/sysctl.d/awg.conf
 	systemctl start "awg-quick@${SERVER_AWG_NIC}"
 	systemctl enable "awg-quick@${SERVER_AWG_NIC}"
 
-	newClient
-	echo -e "${GREEN}If you want to add more clients, you simply need to run this script another time!${NC}"
+	echo -e "${GREEN}AmneziaWG is installed. Client configurations will be created by the WireGuard API.${NC}"
 
 	# Check if AmneziaWG is running
 	systemctl is-active --quiet "awg-quick@${SERVER_AWG_NIC}"
@@ -716,117 +712,6 @@ net.ipv6.conf.all.forwarding = 1" >/etc/sysctl.d/awg.conf
 	else
 		echo -e "${ORANGE}Warning: .env file not found at $CONFIG_DIR/.env. Cannot write AmneziaWG port.${NC}"
 	fi
-}
-
-function newClient() {
-	# If SERVER_PUB_IP is IPv6, add brackets if missing
-	if [[ ${SERVER_PUB_IP} =~ .*:.* ]]; then
-		if [[ ${SERVER_PUB_IP} != *"["* ]] || [[ ${SERVER_PUB_IP} != *"]"* ]]; then
-			SERVER_PUB_IP="[${SERVER_PUB_IP}]"
-		fi
-	fi
-	ENDPOINT="${SERVER_PUB_IP}:${SERVER_PORT}"
-
-	echo ""
-	echo "Client configuration"
-	echo ""
-	echo "The client name must consist of alphanumeric character(s). It may also include underscores or dashes and can't exceed 15 chars."
-
-	until [[ ${CLIENT_NAME} =~ ^[a-zA-Z0-9_-]+$ && ${CLIENT_EXISTS} == '0' && ${#CLIENT_NAME} -lt 16 ]]; do
-		read -rp "Client name: " -e CLIENT_NAME
-		CLIENT_EXISTS=$(grep -c -E "^### Client ${CLIENT_NAME}\$" "${SERVER_AWG_CONF}")
-
-		if [[ ${CLIENT_EXISTS} != 0 ]]; then
-			echo ""
-			echo -e "${ORANGE}A client with the specified name was already created, please choose another name.${NC}"
-			echo ""
-		fi
-	done
-
-	for DOT_IP in {2..254}; do
-		DOT_EXISTS=$(grep -c "${SERVER_AWG_IPV4::-1}${DOT_IP}" "${SERVER_AWG_CONF}")
-		if [[ ${DOT_EXISTS} == '0' ]]; then
-			break
-		fi
-	done
-
-	if [[ ${DOT_EXISTS} == '1' ]]; then
-		echo ""
-		echo "The subnet configured supports only 253 clients."
-		exit 1
-	fi
-
-	BASE_IP=$(echo "$SERVER_AWG_IPV4" | awk -F '.' '{ print $1"."$2"."$3 }')
-	until [[ ${IPV4_EXISTS} == '0' ]]; do
-		read -rp "Client AmneziaWG IPv4: ${BASE_IP}." -e -i "${DOT_IP}" DOT_IP
-		CLIENT_AWG_IPV4="${BASE_IP}.${DOT_IP}"
-		IPV4_EXISTS=$(grep -c "$CLIENT_AWG_IPV4/32" "${SERVER_AWG_CONF}")
-
-		if [[ ${IPV4_EXISTS} != 0 ]]; then
-			echo ""
-			echo -e "${ORANGE}A client with the specified IPv4 was already created, please choose another IPv4.${NC}"
-			echo ""
-		fi
-	done
-
-	BASE_IP=$(echo "$SERVER_AWG_IPV6" | awk -F '::' '{ print $1 }')
-	until [[ ${IPV6_EXISTS} == '0' ]]; do
-		read -rp "Client AmneziaWG IPv6: ${BASE_IP}::" -e -i "${DOT_IP}" DOT_IP
-		CLIENT_AWG_IPV6="${BASE_IP}::${DOT_IP}"
-		IPV6_EXISTS=$(grep -c "${CLIENT_AWG_IPV6}/128" "${SERVER_AWG_CONF}")
-
-		if [[ ${IPV6_EXISTS} != 0 ]]; then
-			echo ""
-			echo -e "${ORANGE}A client with the specified IPv6 was already created, please choose another IPv6.${NC}"
-			echo ""
-		fi
-	done
-
-	# Generate key pair for the client
-	CLIENT_PRIV_KEY=$(awg genkey)
-	CLIENT_PUB_KEY=$(echo "${CLIENT_PRIV_KEY}" | awg pubkey)
-	CLIENT_PRE_SHARED_KEY=$(awg genpsk)
-
-	HOME_DIR=$(getHomeDirForClient "${CLIENT_NAME}")
-
-	# Create client file and add the server as a peer
-	echo "[Interface]
-PrivateKey = ${CLIENT_PRIV_KEY}
-Address = ${CLIENT_AWG_IPV4}/32,${CLIENT_AWG_IPV6}/128
-DNS = ${CLIENT_DNS_1},${CLIENT_DNS_2}
-Jc = ${SERVER_AWG_JC}
-Jmin = ${SERVER_AWG_JMIN}
-Jmax = ${SERVER_AWG_JMAX}
-S1 = ${SERVER_AWG_S1}
-S2 = ${SERVER_AWG_S2}
-H1 = ${SERVER_AWG_H1}
-H2 = ${SERVER_AWG_H2}
-H3 = ${SERVER_AWG_H3}
-H4 = ${SERVER_AWG_H4}
-
-[Peer]
-PublicKey = ${SERVER_PUB_KEY}
-PresharedKey = ${CLIENT_PRE_SHARED_KEY}
-Endpoint = ${ENDPOINT}
-AllowedIPs = ${ALLOWED_IPS}" >"${HOME_DIR}/${SERVER_AWG_NIC}-client-${CLIENT_NAME}.conf"
-
-	# Add the client as a peer to the server
-	echo -e "\n### Client ${CLIENT_NAME}
-[Peer]
-PublicKey = ${CLIENT_PUB_KEY}
-PresharedKey = ${CLIENT_PRE_SHARED_KEY}
-AllowedIPs = ${CLIENT_AWG_IPV4}/32,${CLIENT_AWG_IPV6}/128" >>"${SERVER_AWG_CONF}"
-
-	awg syncconf "${SERVER_AWG_NIC}" <(awg-quick strip "${SERVER_AWG_NIC}")
-
-	# Generate QR code if qrencode is installed
-	if command -v qrencode &>/dev/null; then
-		echo -e "${GREEN}\nHere is your client config file as a QR Code:\n${NC}"
-		qrencode -t ansiutf8 -l L <"${HOME_DIR}/${SERVER_AWG_NIC}-client-${CLIENT_NAME}.conf"
-		echo ""
-	fi
-
-	echo -e "${GREEN}Your client config file is in ${HOME_DIR}/${SERVER_AWG_NIC}-client-${CLIENT_NAME}.conf${NC}"
 }
 
 function listClients() {
@@ -941,28 +826,24 @@ function manageMenu() {
 	echo "It looks like AmneziaWG is already installed."
 	echo ""
 	echo "What do you want to do?"
-	echo "   1) Add a new user"
-	echo "   2) List all users"
-	echo "   3) Revoke existing user"
-	echo "   4) Uninstall AmneziaWG"
-	echo "   5) Exit"
-	until [[ ${MENU_OPTION} =~ ^[1-5]$ ]]; do
-		read -rp "Select an option [1-5]: " MENU_OPTION
+	echo "   1) List all users"
+	echo "   2) Revoke existing user"
+	echo "   3) Uninstall AmneziaWG"
+	echo "   4) Exit"
+	until [[ ${MENU_OPTION} =~ ^[1-4]$ ]]; do
+		read -rp "Select an option [1-4]: " MENU_OPTION
 	done
 	case "${MENU_OPTION}" in
 	1)
-		newClient
-		;;
-	2)
 		listClients
 		;;
-	3)
+	2)
 		revokeClient
 		;;
-	4)
+	3)
 		uninstallAmneziaWG
 		;;
-	5)
+	4)
 		exit 0
 		;;
 	esac
