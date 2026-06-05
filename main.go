@@ -623,44 +623,56 @@ func removeAllClientsFromConfig() error {
 	return nil
 }
 
-// Get the next available IPv4 address
+// Get the next available IPv4 address.
+//
+// Allocates across the full /16 (base = first two octets of the server IP, e.g.
+// "10.66"), filling gaps from the live WireGuard config. This lifts the old
+// /24 ceiling of ~253 peers to ~64k per node.
+//
+// Backward compatible: every IPv4 already present in the config (existing
+// /24 peers like 10.66.66.x, plus the server's own address) is read and
+// skipped, so widening the interface mask from /24 to /16 reuses all current
+// peers with zero renumbering. New peers fill the lowest free address first,
+// which keeps existing 10.66.66.x untouched while filling 10.66.0.x upward.
+//
+// NOTE: the WireGuard interface Address must be /16 (not /24) for the addresses
+// beyond the original /24 to route. Deploy this only on nodes whose interface
+// has been widened to /16.
 func getNextAvailableIPv4() (string, error) {
-	// Parse the server IP to get the base network
 	parts := strings.Split(wgParams.ServerWGIPv4, ".")
 	if len(parts) != 4 {
 		return "", fmt.Errorf("invalid server IPv4 address format")
 	}
-	
-	baseIP := fmt.Sprintf("%s.%s.%s", parts[0], parts[1], parts[2])
-	
-	// Get existing IPs from the config file
+
+	// /16 base: first two octets.
+	base := fmt.Sprintf("%s.%s", parts[0], parts[1])
+	serverOwnIP := wgParams.ServerWGIPv4
+
 	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return "", fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
-	
-	// Find all IPv4 addresses in the config
-	ipv4Pattern := baseIP + `\.(\d+)`
-	ipv4Regex := regexp.MustCompile(ipv4Pattern)
-	matches := ipv4Regex.FindAllStringSubmatch(string(content), -1)
-	
-	// Collect all used last octets
-	usedOctets := make(map[int]bool)
-	for _, match := range matches {
-		if len(match) == 2 {
-			var octet int
-			fmt.Sscanf(match[1], "%d", &octet)
-			usedOctets[octet] = true
+
+	// Collect every full IPv4 in this /16 already present in the config
+	// (Address and AllowedIPs lines, plus the server's own interface address).
+	usedIPs := make(map[string]bool)
+	ipv4Regex := regexp.MustCompile(regexp.QuoteMeta(base) + `\.\d{1,3}\.\d{1,3}`)
+	for _, ip := range ipv4Regex.FindAllString(string(content), -1) {
+		usedIPs[ip] = true
+	}
+	usedIPs[serverOwnIP] = true
+
+	// Walk the /16 host space, lowest first, filling gaps. Skip .0 and .255 in
+	// each third-octet block (network/broadcast convention).
+	for c := 0; c <= 255; c++ {
+		for h := 1; h <= 254; h++ {
+			ip := fmt.Sprintf("%s.%d.%d", base, c, h)
+			if !usedIPs[ip] {
+				return ip, nil
+			}
 		}
 	}
-	
-	// Find the first available octet starting from 2
-	for i := 2; i <= 254; i++ {
-		if !usedOctets[i] {
-			return fmt.Sprintf("%s.%d", baseIP, i), nil
-		}
-	}
-	
+
 	return "", fmt.Errorf("no available IPv4 addresses in the subnet")
 }
 
@@ -699,13 +711,17 @@ func getNextAvailableIPv6() (string, error) {
 		}
 	}
 	
-	// Find the first available part starting from 2
-	for i := 2; i <= 254; i++ {
+	// Find the first available part starting from 2. Widened from 254 to ~64k so
+	// IPv6 doesn't become the new ceiling once IPv4 is on a /16. The base prefix
+	// is a /64 (or wider), so this host range stays well within the subnet — no
+	// interface change needed for IPv6. Format is unchanged so existing peers
+	// (read above) are matched and skipped identically.
+	for i := 2; i <= 65534; i++ {
 		if !usedParts[i] {
 			return fmt.Sprintf("%s::%d", baseIP, i), nil
 		}
 	}
-	
+
 	return "", fmt.Errorf("no available IPv6 addresses in the subnet")
 }
 
