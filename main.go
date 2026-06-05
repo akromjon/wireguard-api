@@ -711,14 +711,21 @@ func getNextAvailableIPv6() (string, error) {
 		}
 	}
 	
-	// Find the first available part starting from 2. Widened from 254 to ~64k so
-	// IPv6 doesn't become the new ceiling once IPv4 is on a /16. The base prefix
-	// is a /64 (or wider), so this host range stays well within the subnet — no
-	// interface change needed for IPv6. Format is unchanged so existing peers
-	// (read above) are matched and skipped identically.
-	for i := 2; i <= 65534; i++ {
+	// Find the first available part starting from 2, widened from 254 to 0xfffe
+	// so IPv6 doesn't become the new ceiling once IPv4 is on a /16.
+	//
+	// The value is written as HEX (`%x`) to match how it is parsed back (`%x`
+	// above). This is deliberate and fixes a latent collision: the host part is
+	// a single IPv6 group, which the IP stack always interprets as hex. The old
+	// code wrote `%d` but read `%x`, so e.g. an existing "::254" was recorded as
+	// used at index 0x254 while index 254 stayed "free" — the allocator could
+	// then re-emit "::254". Writing hex makes the used-set and new addresses
+	// consistent, so existing peers (read above) are skipped correctly and never
+	// reissued. Hex also keeps every group <= 4 digits (max "fffe"), so all
+	// addresses stay valid up to ~65k.
+	for i := 2; i <= 0xfffe; i++ {
 		if !usedParts[i] {
-			return fmt.Sprintf("%s::%d", baseIP, i), nil
+			return fmt.Sprintf("%s::%x", baseIP, i), nil
 		}
 	}
 

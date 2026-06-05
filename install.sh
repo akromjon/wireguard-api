@@ -197,7 +197,42 @@ migrate_to_sixteen_allocator() {
     fi
     echo -e "${YELLOW}Backend interface=${NIC} ip=${IP} conf=${CONF}${NC}"
 
-    # 2. Download + swap the new binary.
+    local NET16 NET24
+    NET16="$(echo "$IP" | cut -d. -f1-2).0.0/16"
+    NET24="$(echo "$IP" | cut -d. -f1-3).0/24"
+
+    # 2. Widen the interface to /16 FIRST — before the new binary goes live —
+    #    so any address it later hands out beyond the original /24 will route.
+    #    The old binary keeps allocating inside the /24 in the meantime, which
+    #    is still valid within the /16, so there is no window of broken peers.
+
+    # 2a. Persist in the config (IPv4 only; leave IPv6 /64). Also widen the
+    #     firewalld masquerade source in the config so a reboot/awg-quick restart
+    #     keeps /16 instead of re-adding /24.
+    if grep -qE "^Address = ${IP}/16([,/[:space:]]|$)" "$CONF"; then
+        echo -e "${GREEN}Config already /16.${NC}"
+    else
+        sed -i -E "s#^(Address = ${IP})/24#\1/16#" "$CONF"
+        echo -e "${GREEN}Config Address set to ${IP}/16.${NC}"
+    fi
+    sed -i "s#source address=${NET24}#source address=${NET16}#g" "$CONF" 2>/dev/null || true
+
+    # 2b. Apply live, gap-free: add /16 BEFORE removing /24 so the server is
+    #     never without a covering address. WG peers are independent of the
+    #     interface address, so tunnels are not dropped.
+    ip addr replace "${IP}/16" dev "${NIC}"
+    ip addr del "${IP}/24" dev "${NIC}" 2>/dev/null || true
+    echo -e "${GREEN}Live interface set to ${IP}/16.${NC}"
+
+    # 2c. firewalld runtime masquerade (iptables MASQUERADE is unscoped — no-op).
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        firewall-cmd --remove-rich-rule="rule family=ipv4 source address=${NET24} masquerade" 2>/dev/null || true
+        firewall-cmd --add-rich-rule="rule family=ipv4 source address=${NET16} masquerade" 2>/dev/null || true
+        firewall-cmd --runtime-to-permanent 2>/dev/null || true
+        echo -e "${GREEN}firewalld masquerade widened to ${NET16}.${NC}"
+    fi
+
+    # 3. NOW download + swap the new /16-allocator binary.
     FILENAME="$(detect_binary_filename)"
     [[ -z "$FILENAME" ]] && { echo -e "${RED}Unsupported arch: $(uname -sm)${NC}"; return 1; }
     if [[ "$TAG" == "latest" ]]; then
@@ -214,7 +249,7 @@ migrate_to_sixteen_allocator() {
     mv "$TMP" "${INSTALL_DIR}/wireguard" && chmod +x "${INSTALL_DIR}/wireguard"
     echo -e "${GREEN}Binary updated: ${INSTALL_DIR}/wireguard${NC}"
 
-    # 3. Restart the API service.
+    # 4. Restart the API service.
     systemctl restart wireguard.service 2>/dev/null || true
     if systemctl is-active --quiet wireguard.service; then
         echo -e "${GREEN}wireguard.service restarted.${NC}"
@@ -222,30 +257,7 @@ migrate_to_sixteen_allocator() {
         echo -e "${YELLOW}Warning: wireguard.service not active — journalctl -u wireguard.service${NC}"
     fi
 
-    # 4. Widen the interface to /16 — persist in config (IPv4 only; leave IPv6 /64).
-    if grep -qE "^Address = ${IP}/16([,/[:space:]]|$)" "$CONF"; then
-        echo -e "${GREEN}Config already /16.${NC}"
-    else
-        sed -i -E "s#^(Address = ${IP})/24#\1/16#" "$CONF"
-        echo -e "${GREEN}Config Address set to ${IP}/16.${NC}"
-    fi
-    # Apply live (does NOT drop tunnels — peers are independent of the iface addr).
-    ip addr del "${IP}/24" dev "${NIC}" 2>/dev/null || true
-    ip addr replace "${IP}/16" dev "${NIC}"
-    echo -e "${GREEN}Live interface set to ${IP}/16.${NC}"
-
-    # 5. firewalld masquerade widening (only if firewalld is active).
-    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-        local NET16 NET24
-        NET16="$(echo "$IP" | cut -d. -f1-2).0.0/16"
-        NET24="$(echo "$IP" | cut -d. -f1-3).0/24"
-        firewall-cmd --remove-rich-rule="rule family=ipv4 source address=${NET24} masquerade" 2>/dev/null || true
-        firewall-cmd --add-rich-rule="rule family=ipv4 source address=${NET16} masquerade" 2>/dev/null || true
-        firewall-cmd --runtime-to-permanent 2>/dev/null || true
-        echo -e "${GREEN}firewalld masquerade widened to ${NET16}.${NC}"
-    fi
-
-    # 6. Verify.
+    # 5. Verify.
     echo -e "${YELLOW}Verification:${NC}"
     if ip -4 addr show "$NIC" | grep -qE "inet ${IP}/16"; then
         echo -e "${GREEN}  ✓ interface ${NIC} is ${IP}/16${NC}"
