@@ -148,6 +148,156 @@ configure_outbound_smtp_block() {
     echo -e "${GREEN}Outbound SMTP block installed for ${VPN_INTERFACE}.${NC}"
 }
 
+configure_conntrack() {
+    # NAT-gateway tuning. The default nf_conntrack table (65536) fills up under
+    # ~100+ concurrent VPN users, causing "nf_conntrack: table full, dropping
+    # packet" and severe slowness. We size the table to the node's real
+    # capacity (configs provisioned x peak flows per user), bounded by a RAM
+    # safety cap, then recycle stale flows faster, persist, and monitor at 80%.
+    # Tunable via env: CONNTRACK_CONFIGS_PER_NODE, CONNTRACK_FLOWS_PER_USER.
+    local configs flows kb ram_bytes max hash cap
+    configs="${CONNTRACK_CONFIGS_PER_NODE:-1000}"
+    flows="${CONNTRACK_FLOWS_PER_USER:-512}"
+    kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+    ram_bytes=$(( kb * 1024 ))
+
+    # size by real capacity: configs x peak-flows-per-user
+    max=$(( configs * flows ))
+
+    # RAM safety cap: a full table (~320 bytes/entry) must not exceed 15% of RAM
+    cap=$(( ram_bytes * 15 / 100 / 320 ))
+    [[ "$max" -gt "$cap" ]] && max="$cap"
+
+    # floor so small boxes still get a usable table
+    [[ "$max" -lt 131072 ]] && max=131072
+
+    # hashsize = max/4 (best-practice ratio)
+    hash=$(( max / 4 ))
+    [[ "$hash" -lt 32768 ]] && hash=32768
+
+    echo -e "${YELLOW}Tuning nf_conntrack (max=${max}, hashsize=${hash})...${NC}"
+
+    cat > /etc/sysctl.d/99-conntrack.conf <<CONNTRACK
+net.netfilter.nf_conntrack_max = ${max}
+net.netfilter.nf_conntrack_tcp_timeout_established = 86400
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+net.netfilter.nf_conntrack_tcp_timeout_close_wait = 30
+net.netfilter.nf_conntrack_tcp_timeout_fin_wait = 30
+net.netfilter.nf_conntrack_udp_timeout = 30
+net.netfilter.nf_conntrack_udp_timeout_stream = 120
+CONNTRACK
+
+    # hashsize must be set at module load; persist via modprobe.d
+    echo "options nf_conntrack hashsize=${hash}" > /etc/modprobe.d/nf_conntrack.conf
+
+    # ensure the module loads at boot BEFORE systemd-sysctl, so nf_conntrack_max
+    # reliably applies on every server/provider regardless of boot order
+    echo "nf_conntrack" > /etc/modules-load.d/nf_conntrack.conf
+
+    # apply immediately (no reboot)
+    modprobe nf_conntrack 2>/dev/null || true
+    echo "${hash}" > /sys/module/nf_conntrack/parameters/hashsize 2>/dev/null || true
+    sysctl -q -p /etc/sysctl.d/99-conntrack.conf 2>/dev/null || true
+
+    # monitor: warn at >=80% table use, AND flag any single user hogging
+    # connections (>=2000) so an abuser is visible before hitting the cap
+    cat > /usr/local/bin/conntrack-watch.sh <<'WATCH'
+#!/bin/bash
+max=$(sysctl -n net.netfilter.nf_conntrack_max 2>/dev/null) || exit 0
+cnt=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null) || exit 0
+[[ "${max:-0}" -gt 0 ]] || exit 0
+pct=$(( cnt * 100 / max ))
+[[ "$pct" -ge 80 ]] && logger -t conntrack-watch "WARNING table ${cnt}/${max} (${pct}%)"
+if command -v conntrack >/dev/null 2>&1; then
+  # derive the VPN client subnet prefix from this node's params (default 10.66)
+  for p in /etc/amnezia/amneziawg/params /etc/wireguard/params; do [ -f "$p" ] && . "$p" 2>/dev/null && break; done
+  ip4="${SERVER_AWG_IPV4:-${SERVER_WG_IPV4:-10.66.66.1}}"
+  pre="$(printf '%s' "$ip4" | cut -d. -f1-2)"; pre_re="${pre//./\\.}"
+  conntrack -L 2>/dev/null | grep -oE "src=${pre_re}\.[0-9.]+" | sort | uniq -c | sort -rn \
+    | awk '$1>=2000{print $2" "$1}' | while read ip c; do logger -t conntrack-watch "HOG ${ip#src=} ${c}conn"; done
+fi
+exit 0
+WATCH
+    chmod +x /usr/local/bin/conntrack-watch.sh
+    echo "*/5 * * * * root /usr/local/bin/conntrack-watch.sh" > /etc/cron.d/conntrack-watch
+
+    echo -e "${GREEN}nf_conntrack tuned: max=$(sysctl -n net.netfilter.nf_conntrack_max 2>/dev/null), hashsize=$(cat /sys/module/nf_conntrack/parameters/hashsize 2>/dev/null).${NC}"
+}
+
+configure_abuse_protection() {
+    # Per-user connection cap so one abusive client cannot exhaust the shared
+    # conntrack table for everyone. Default 4000 concurrent connections per VPN
+    # client IP (generous: normal users sit in the hundreds). Tunable via
+    # CONNTRACK_PER_USER_CAP. Persisted as a systemd unit applied after the
+    # tunnel is up. The `conntrack` tool powers the top-talker alert.
+    local cap nic quicksvc
+    cap="${CONNTRACK_PER_USER_CAP:-4000}"
+    # backend-aware interface + tunnel service (amneziawg=awg0/awg-quick, wireguard=wg0/wg-quick)
+    if [[ "${VPN_TYPE}" == "wireguard" ]]; then
+        [[ -f /etc/wireguard/params ]] && . /etc/wireguard/params
+        nic="${SERVER_WG_NIC:-wg0}"; quicksvc="wg-quick@${nic}.service"
+    else
+        [[ -f /etc/amnezia/amneziawg/params ]] && . /etc/amnezia/amneziawg/params
+        nic="${SERVER_AWG_NIC:-awg0}"; quicksvc="awg-quick@${nic}.service"
+    fi
+
+    command -v conntrack >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y conntrack >/dev/null 2>&1 || true
+
+    echo -e "${YELLOW}Installing per-user connection cap (${cap}/user) on ${nic}...${NC}"
+
+    cat > /etc/default/awg-connlimit <<DEFAULT
+AWG_CONN_CAP=${cap}
+AWG_NIC=${nic}
+DEFAULT
+
+    cat > /usr/local/bin/awg-connlimit.sh <<'CL'
+#!/bin/bash
+CAP=4000
+NIC=awg0
+[ -f /etc/default/awg-connlimit ] && . /etc/default/awg-connlimit
+CAP="${AWG_CONN_CAP:-$CAP}"; NIC="${AWG_NIC:-$NIC}"
+run() {
+  local act="$1" pair ipt mask
+  for pair in "iptables 32" "ip6tables 128"; do
+    set -- $pair; ipt="$1"; mask="$2"
+    if [ "$act" = add ]; then
+      # TCP: reject NEW connections above the cap (existing stay up). connlimit counts
+      # ALL flows per source IP, so TCP+UDP share one per-user total.
+      $ipt -C FORWARD -i "$NIC" -p tcp --syn -m connlimit --connlimit-above "$CAP" --connlimit-mask "$mask" -j REJECT --reject-with tcp-reset 2>/dev/null \
+        || $ipt -I FORWARD 1 -i "$NIC" -p tcp --syn -m connlimit --connlimit-above "$CAP" --connlimit-mask "$mask" -j REJECT --reject-with tcp-reset 2>/dev/null || true
+      # UDP: drop NEW flows above the cap (covers QUIC / UDP torrents that TCP --syn misses)
+      $ipt -C FORWARD -i "$NIC" -p udp -m connlimit --connlimit-above "$CAP" --connlimit-mask "$mask" -j DROP 2>/dev/null \
+        || $ipt -I FORWARD 1 -i "$NIC" -p udp -m connlimit --connlimit-above "$CAP" --connlimit-mask "$mask" -j DROP 2>/dev/null || true
+    else
+      $ipt -D FORWARD -i "$NIC" -p tcp --syn -m connlimit --connlimit-above "$CAP" --connlimit-mask "$mask" -j REJECT --reject-with tcp-reset 2>/dev/null || true
+      $ipt -D FORWARD -i "$NIC" -p udp -m connlimit --connlimit-above "$CAP" --connlimit-mask "$mask" -j DROP 2>/dev/null || true
+    fi
+  done
+}
+case "$1" in add) run add;; del) run del;; *) echo "usage: $0 add|del";; esac
+CL
+    chmod +x /usr/local/bin/awg-connlimit.sh
+
+    cat > /etc/systemd/system/awg-connlimit.service <<UNIT
+[Unit]
+Description=Per-user connection cap for ${nic}
+After=${quicksvc} network-online.target
+Wants=${quicksvc}
+PartOf=${quicksvc}
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/awg-connlimit.sh add
+ExecStop=/usr/local/bin/awg-connlimit.sh del
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now awg-connlimit.service >/dev/null 2>&1 || /usr/local/bin/awg-connlimit.sh add
+
+    echo -e "${GREEN}Per-user connection cap active (${cap}/user) on ${nic}.${NC}"
+}
+
 RELEASE_REPO="akromjon/wireguard-api"
 
 detect_binary_filename() {
@@ -356,6 +506,12 @@ if ! configure_outbound_smtp_block; then
     rm -rf "$TEMP_DIR"
     exit 1
 fi
+
+# Non-fatal: NAT connection-tracking tuning so the node survives high user counts.
+configure_conntrack || echo -e "${RED}Warning: nf_conntrack tuning failed (non-fatal).${NC}"
+
+# Non-fatal: per-user connection cap so one client can't starve the shared table.
+configure_abuse_protection || echo -e "${RED}Warning: abuse-protection setup failed (non-fatal).${NC}"
 
 # Clean up
 cd - > /dev/null || exit 1
