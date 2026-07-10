@@ -1003,6 +1003,8 @@ func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
 		}
 	}
 	
+	// PersistentKeepalive keeps the client's NAT mapping alive while the
+	// phone is locked and idle; without it recovery after unlock is slow.
 	clientConfig := fmt.Sprintf(`[Interface]
 %s
 
@@ -1011,6 +1013,7 @@ PublicKey = %s
 PresharedKey = %s
 Endpoint = %s
 AllowedIPs = %s
+PersistentKeepalive = 25
 `, strings.Join(interfaceLines, "\n"),
 	   wgParams.ServerPubKey, preSharedKey, endpoint, wgParams.AllowedIPs)
 
