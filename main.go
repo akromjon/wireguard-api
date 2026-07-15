@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -79,6 +80,20 @@ type AddUserRequest struct {
 	IPV6   string `json:"ipv6,omitempty"`
 }
 
+// Bulk add users request
+type AddUsersBulkRequest struct {
+	Names []string `json:"names"`
+}
+
+// Per-client outcome of a bulk add
+type BulkUserResult struct {
+	Name    string `json:"name"`
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	IPV4    string `json:"ipv4,omitempty"`
+	IPV6    string `json:"ipv6,omitempty"`
+}
+
 // Delete user request
 type DeleteUserRequest struct {
 	Name string `json:"name"`
@@ -89,7 +104,24 @@ var (
 	wgParams WGParams
 	// Mutex to prevent concurrent WireGuard config modifications
 	wgConfigMutex sync.Mutex
+	// Client names must be safe to embed in config files and file names
+	clientNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
+	// Returned by addWireGuardClient when the name is already taken, so
+	// handlers can answer 409 instead of a generic 500
+	errClientExists = errors.New(clientExistsMessage)
 )
+
+// Shared response texts so the single-add and bulk-add handlers can't drift
+const (
+	invalidClientNameMessage = "must contain only alphanumeric characters, underscores, or dashes and be less than 16 characters"
+	clientExistsMessage      = "A client with this name already exists"
+)
+
+// Upper bound for one bulk-add request; keeps a single request from holding
+// the config mutex for an unbounded amount of time. Mirrored by the admin
+// panel cap (backend ServersTable "Add Users" action) and openapi.yml
+// maxItems — change all three together.
+const maxBulkUsers = 500
 
 // Auth middleware for Gin
 func authMiddleware() gin.HandlerFunc {
@@ -216,7 +248,15 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	
-	// Create router
+	// Start server
+	router := newRouter()
+	log.Printf("WireGuard API server running on port %s", API_PORT)
+	log.Fatal(router.Run(":" + API_PORT))
+}
+
+// Build the router with auth middleware and every route. Shared with the
+// tests so they exercise the exact production routing.
+func newRouter() *gin.Engine {
 	router := gin.Default()
 
 	// Apply authentication middleware
@@ -225,6 +265,7 @@ func main() {
 	// API routes
 	router.GET("/api/users", listUsersHandlerGin)
 	router.POST("/api/users/add", addUserHandlerGin)
+	router.POST("/api/users/add-bulk", addUsersBulkHandlerGin)
 	router.POST("/api/users/delete", deleteUserHandlerGin)
 	router.POST("/api/users/delete-all", deleteAllUsersHandlerGin)
 
@@ -234,9 +275,7 @@ func main() {
 	router.POST("/api/stop", wireGuardStopHandlerGin)
 	router.POST("/api/restart", wireGuardRestartHandlerGin)
 
-	// Start server
-	log.Printf("WireGuard API server running on port %s", API_PORT)
-	log.Fatal(router.Run(":" + API_PORT))
+	return router
 }
 
 // Load WireGuard/AmneziaWG parameters from params file
@@ -355,60 +394,24 @@ func addUserHandlerGin(c *gin.Context) {
 	}
 
 	// Validate client name
-	nameRegex := regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
-	if !nameRegex.MatchString(req.Name) {
+	if !clientNameRegex.MatchString(req.Name) {
 		c.JSON(http.StatusBadRequest, APIResponse{
 			Success: false,
-			Message: "Client name must contain only alphanumeric characters, underscores, or dashes and be less than 16 characters",
+			Message: "Client name " + invalidClientNameMessage,
 		})
 		return
 	}
 
-	// Check if client already exists
-	exists, err := clientExists(req.Name)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, APIResponse{
-			Success: false,
-			Message: err.Error(),
-		})
-		return
-	}
-	if exists {
+	// Create the client; the existence check and IP allocation both happen
+	// under the config lock so concurrent same-name adds can't both pass
+	clientConfig, ipv4, ipv6, err := addWireGuardClient(req.Name, req.IPV4, req.IPV6)
+	if errors.Is(err, errClientExists) {
 		c.JSON(http.StatusConflict, APIResponse{
 			Success: false,
-			Message: "A client with this name already exists",
+			Message: clientExistsMessage,
 		})
 		return
 	}
-
-	// Auto-assign IPV4 if not provided
-	ipv4 := req.IPV4
-	if ipv4 == "" {
-		ipv4, err = getNextAvailableIPv4()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Success: false,
-				Message: err.Error(),
-			})
-			return
-		}
-	}
-
-	// Auto-assign IPV6 if not provided and IPV6 is enabled
-	ipv6 := req.IPV6
-	if ipv6 == "" && wgParams.ServerWGIPv6 != "" {
-		ipv6, err = getNextAvailableIPv6()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Success: false,
-				Message: err.Error(),
-			})
-			return
-		}
-	}
-
-	// Create the client
-	clientConfig, err := addWireGuardClient(req.Name, ipv4, ipv6)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, APIResponse{
 			Success: false,
@@ -430,6 +433,170 @@ func addUserHandlerGin(c *gin.Context) {
 		Message: "Client added successfully",
 		Data:    client,
 	})
+}
+
+// Handler for adding many users in one request. All clients are created under
+// a single lock hold with ONE config apply at the end, so adding N users costs
+// one syncconf instead of N. Per-name failures don't abort the batch; the
+// response lists the outcome of every requested name.
+func addUsersBulkHandlerGin(c *gin.Context) {
+	var req AddUsersBulkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "Invalid request payload",
+		})
+		return
+	}
+
+	if len(req.Names) == 0 {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "names must contain at least one client name",
+		})
+		return
+	}
+	if len(req.Names) > maxBulkUsers {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("names must not contain more than %d client names", maxBulkUsers),
+		})
+		return
+	}
+
+	// Reject the whole request on any bad or duplicate name before touching
+	// the config, so a validation bug can't half-apply a batch.
+	seen := make(map[string]bool, len(req.Names))
+	for _, name := range req.Names {
+		if !clientNameRegex.MatchString(name) {
+			c.JSON(http.StatusBadRequest, APIResponse{
+				Success: false,
+				Message: fmt.Sprintf("invalid client name %q: must contain only alphanumeric characters, underscores, or dashes and be less than 16 characters", name),
+			})
+			return
+		}
+		if seen[name] {
+			c.JSON(http.StatusBadRequest, APIResponse{
+				Success: false,
+				Message: fmt.Sprintf("duplicate client name %q in request", name),
+			})
+			return
+		}
+		seen[name] = true
+	}
+
+	// Key generation shells out to wg but reads no shared state, so do all of
+	// it before taking the lock — this keeps the lock hold to file reads and
+	// appends instead of ~3 subprocess spawns per client. It also means a
+	// broken wg binary fails the request before anything is written.
+	keys := make([]clientKeys, len(req.Names))
+	for i := range req.Names {
+		k, err := generateClientKeys()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, APIResponse{
+				Success: false,
+				Message: err.Error(),
+			})
+			return
+		}
+		keys[i] = k
+	}
+
+	results := make([]BulkUserResult, 0, len(req.Names))
+	created := 0
+
+	// One lock hold for the whole batch INCLUDING the final sync, so the
+	// response describes a state that was actually applied — a concurrent
+	// delete can't slip between creation and apply.
+	syncErr := func() error {
+		wgConfigMutex.Lock()
+		defer wgConfigMutex.Unlock()
+
+		for i, name := range req.Names {
+			exists, err := clientExists(name)
+			if err != nil {
+				// Config unreadable — systemic, every remaining name would
+				// fail the same way, so stop here.
+				results = failRemaining(results, req.Names[i:], err)
+				break
+			}
+			if exists {
+				results = append(results, BulkUserResult{Name: name, Success: false, Message: clientExistsMessage})
+				continue
+			}
+
+			ipv4, ipv6, err := allocateClientIPsLocked("", "")
+			if err != nil {
+				// Pool exhausted or config unreadable — also systemic.
+				results = failRemaining(results, req.Names[i:], err)
+				break
+			}
+
+			if _, err := createWireGuardClientLocked(name, ipv4, ipv6, keys[i]); err != nil {
+				results = append(results, BulkUserResult{Name: name, Success: false, Message: err.Error()})
+				continue
+			}
+
+			created++
+			results = append(results, BulkUserResult{Name: name, Success: true, IPV4: ipv4, IPV6: ipv6})
+		}
+
+		// Sync even when nothing new was created: it re-applies any peer a
+		// previously failed batch appended without applying, so a retry
+		// self-heals instead of leaving unapplied peers in the file forever.
+		return syncWireGuardConf()
+	}()
+
+	data := gin.H{
+		"created": created,
+		"failed":  len(req.Names) - created,
+		"results": results,
+	}
+
+	if syncErr != nil {
+		log.Printf("bulk add: created %d clients but failed to apply config: %v", created, syncErr)
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("created %d clients but failed to apply config: %v", created, syncErr),
+			Data:    data,
+		})
+		return
+	}
+
+	// A batch where nothing was created is a failed request, not a success
+	// with a low count — callers keying off the success flag must not record
+	// a fully failed batch as applied.
+	if created == 0 {
+		message := "no clients were created"
+		for _, result := range results {
+			if !result.Success && result.Message != "" {
+				message = fmt.Sprintf("no clients were created: %s", result.Message)
+				break
+			}
+		}
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: message,
+			Data:    data,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Created %d of %d clients", created, len(req.Names)),
+		Data:    data,
+	})
+}
+
+// Mark every name in the slice as failed with the same error. Used when a
+// systemic failure (unreadable config, exhausted pool) makes the rest of a
+// batch pointless.
+func failRemaining(results []BulkUserResult, names []string, err error) []BulkUserResult {
+	for _, name := range names {
+		results = append(results, BulkUserResult{Name: name, Success: false, Message: err.Error()})
+	}
+	return results
 }
 
 // Handler for deleting a user
@@ -740,29 +907,33 @@ func clientExists(name string) (bool, error) {
 		return false, fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
 	
+	// (?m) makes ^/$ match per line; without it `$` only matches end-of-text,
+	// so these checks silently never fired and existence relied solely on the
+	// client config files below.
+
 	// Check for exact name match
-	exactClientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(name) + `$`)
+	exactClientRegex := regexp.MustCompile(`(?m)^### Client ` + regexp.QuoteMeta(name) + `$`)
 	if exactClientRegex.Match(content) {
 		return true, nil
 	}
-	
+
 	// Check for prefixed match with wg0-client- prefix
 	prefixedName := "wg0-client-" + name
-	prefixedClientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(prefixedName) + `$`)
+	prefixedClientRegex := regexp.MustCompile(`(?m)^### Client ` + regexp.QuoteMeta(prefixedName) + `$`)
 	if prefixedClientRegex.Match(content) {
 		return true, nil
 	}
-	
+
 	// Check for prefixed match with awg0-client- prefix
 	awgPrefixedName := "awg0-client-" + name
-	awgPrefixedClientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(awgPrefixedName) + `$`)
+	awgPrefixedClientRegex := regexp.MustCompile(`(?m)^### Client ` + regexp.QuoteMeta(awgPrefixedName) + `$`)
 	if awgPrefixedClientRegex.Match(content) {
 		return true, nil
 	}
-	
+
 	// Check for dynamic prefixed match with interface-client- prefix
 	dynamicPrefixedName := wgParams.ServerWGNIC + "-client-" + name
-	dynamicPrefixedClientRegex := regexp.MustCompile(`### Client ` + regexp.QuoteMeta(dynamicPrefixedName) + `$`)
+	dynamicPrefixedClientRegex := regexp.MustCompile(`(?m)^### Client ` + regexp.QuoteMeta(dynamicPrefixedName) + `$`)
 	if dynamicPrefixedClientRegex.Match(content) {
 		return true, nil
 	}
@@ -909,16 +1080,106 @@ func fileExists(path string) bool {
 }
 
 // Add a new WireGuard client
-func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
+// Fill in any missing client IPs from the allocators. Both allocators read
+// the live config file, so this MUST run with wgConfigMutex held — otherwise
+// a concurrent add can be handed the same address.
+func allocateClientIPsLocked(ipv4, ipv6 string) (string, string, error) {
+	var err error
+
+	if ipv4 == "" {
+		ipv4, err = getNextAvailableIPv4()
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	if ipv6 == "" && wgParams.ServerWGIPv6 != "" {
+		ipv6, err = getNextAvailableIPv6()
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	return ipv4, ipv6, nil
+}
+
+// Key material for one client
+type clientKeys struct {
+	privateKey   string
+	publicKey    string
+	preSharedKey string
+}
+
+// Key generation shells out to wg/awg but reads no shared state, so callers
+// run it BEFORE taking wgConfigMutex to keep lock holds short — a bulk batch
+// spawns 3 subprocesses per client, which would otherwise all sit inside the
+// lock and stall every other handler.
+func generateClientKeys() (clientKeys, error) {
+	privateKey, err := generatePrivateKey()
+	if err != nil {
+		return clientKeys{}, fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	publicKey, err := derivePublicKey(privateKey)
+	if err != nil {
+		return clientKeys{}, fmt.Errorf("failed to derive public key: %v", err)
+	}
+
+	preSharedKey, err := generatePSK()
+	if err != nil {
+		return clientKeys{}, fmt.Errorf("failed to generate pre-shared key: %v", err)
+	}
+
+	return clientKeys{privateKey: privateKey, publicKey: publicKey, preSharedKey: preSharedKey}, nil
+}
+
+// Add a single client and apply the config. The existence check and IP
+// allocation happen under the lock. Returns errClientExists for taken names,
+// otherwise the client config plus the IPs actually assigned.
+func addWireGuardClient(name, ipv4, ipv6 string) (string, string, string, error) {
+	keys, err := generateClientKeys()
+	if err != nil {
+		return "", "", "", err
+	}
+
 	wgConfigMutex.Lock()
 	defer wgConfigMutex.Unlock()
-	
+
+	exists, err := clientExists(name)
+	if err != nil {
+		return "", "", "", err
+	}
+	if exists {
+		return "", "", "", errClientExists
+	}
+
+	ipv4, ipv6, err = allocateClientIPsLocked(ipv4, ipv6)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	clientConfig, err := createWireGuardClientLocked(name, ipv4, ipv6, keys)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	if err := syncWireGuardConf(); err != nil {
+		return "", "", "", fmt.Errorf("failed to sync WireGuard config: %v", err)
+	}
+
+	return clientConfig, ipv4, ipv6, nil
+}
+
+// Write the client config file and append the peer to the server config —
+// WITHOUT applying it. Caller must hold wgConfigMutex, supply pre-generated
+// keys (see generateClientKeys), and call syncWireGuardConf afterwards.
+func createWireGuardClientLocked(name, ipv4, ipv6 string, keys clientKeys) (string, error) {
 	// Ensure the clients directory exists
 	err := os.MkdirAll(WIREGUARD_CLIENTS, 0700)
 	if err != nil {
 		return "", fmt.Errorf("failed to create clients directory: %v", err)
 	}
-	
+
 	// Check if client config file already exists
 	configPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
 	if fileExists(configPath) {
@@ -928,22 +1189,6 @@ func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
 	// Validate that at least one IP address is provided
 	if ipv4 == "" && ipv6 == "" {
 		return "", fmt.Errorf("at least one IP address (IPv4 or IPv6) must be provided")
-	}
-
-	// Generate key pair for the client
-	privateKey, err := generatePrivateKey()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate private key: %v", err)
-	}
-	
-	publicKey, err := derivePublicKey(privateKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to derive public key: %v", err)
-	}
-	
-	preSharedKey, err := generatePSK()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate pre-shared key: %v", err)
 	}
 
 	// Create client configuration
@@ -968,7 +1213,7 @@ func addWireGuardClient(name, ipv4, ipv6 string) (string, error) {
 	
 	// Build client config - include AmneziaWG parameters if backend is AmneziaWG
 	var interfaceLines []string
-	interfaceLines = append(interfaceLines, fmt.Sprintf("PrivateKey = %s", privateKey))
+	interfaceLines = append(interfaceLines, fmt.Sprintf("PrivateKey = %s", keys.privateKey))
 	interfaceLines = append(interfaceLines, addressLine)
 	interfaceLines = append(interfaceLines, fmt.Sprintf("DNS = %s,%s", wgParams.ClientDNS1, wgParams.ClientDNS2))
 	
@@ -1015,7 +1260,7 @@ Endpoint = %s
 AllowedIPs = %s
 PersistentKeepalive = 25
 `, strings.Join(interfaceLines, "\n"),
-	   wgParams.ServerPubKey, preSharedKey, endpoint, wgParams.AllowedIPs)
+	   wgParams.ServerPubKey, keys.preSharedKey, endpoint, wgParams.AllowedIPs)
 
 	// Write client config to file
 	err = os.WriteFile(configPath, []byte(clientConfig), 0600)
@@ -1039,21 +1284,21 @@ PersistentKeepalive = 25
 PublicKey = %s
 PresharedKey = %s
 AllowedIPs = %s
-`, name, publicKey, preSharedKey, allowedIPs)
+`, name, keys.publicKey, keys.preSharedKey, allowedIPs)
 
+	// If the peer can't be appended to the server config, remove the client
+	// file written above — a leftover file makes clientExists treat the name
+	// as taken forever even though no peer exists.
 	f, err := os.OpenFile(WG_CONFIG_FILE, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
+		os.Remove(configPath)
 		return "", fmt.Errorf("failed to open server config: %v", err)
 	}
 	defer f.Close()
 
 	if _, err = f.WriteString(serverConfigUpdate); err != nil {
+		os.Remove(configPath)
 		return "", fmt.Errorf("failed to update server config: %v", err)
-	}
-
-	// Apply the configuration
-	if err := syncWireGuardConf(); err != nil {
-		return "", fmt.Errorf("failed to sync WireGuard config: %v", err)
 	}
 
 	return clientConfig, nil
