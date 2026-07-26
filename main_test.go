@@ -28,6 +28,12 @@ const fakeWGScript = `#!/bin/bash
 dir="$(dirname "$0")"
 echo "$1" >> "$dir/invocations.log"
 case "$1" in
+  show)
+    if [ -f "$dir/status_fail" ]; then
+      echo "fake show failure" >&2
+      exit 1
+    fi
+    ;;
   genkey) echo "priv$RANDOM$RANDOM$RANDOM" ;;
   pubkey) echo "pub-$(cat)" ;;
   genpsk) echo "psk$RANDOM$RANDOM$RANDOM" ;;
@@ -234,6 +240,62 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 	if got := env.authedRequest(t, http.MethodGet, "/api/users", nil).Code; got != http.StatusOK {
 		t.Errorf("valid token: got status %d, want 200", got)
+	}
+}
+
+func TestHealthEndpointReturnsOnlyRunningState(t *testing.T) {
+	env := setupTestEnv(t)
+
+	recorder := env.authedRequest(t, http.MethodGet, "/api/health", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", recorder.Code, recorder.Body.String())
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Running bool `json:"running"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.Success || !resp.Data.Running {
+		t.Fatalf("unexpected health response: %s", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "peers") || strings.Contains(recorder.Body.String(), "status_output") {
+		t.Fatalf("health response contains detailed status data: %s", recorder.Body.String())
+	}
+	if calls := env.syncconfCalls(t); calls != 0 {
+		t.Errorf("health endpoint must not synchronize config: got %d syncconf calls", calls)
+	}
+}
+
+func TestHealthEndpointReportsStoppedInterfaceWithoutDetails(t *testing.T) {
+	env := setupTestEnv(t)
+	if err := os.WriteFile(filepath.Join(env.dir, "status_fail"), nil, 0600); err != nil {
+		t.Fatalf("creating status failure marker: %v", err)
+	}
+
+	recorder := env.authedRequest(t, http.MethodGet, "/api/health", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", recorder.Code, recorder.Body.String())
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Running bool `json:"running"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.Success || resp.Data.Running {
+		t.Fatalf("unexpected stopped health response: %s", recorder.Body.String())
+	}
+	if calls := env.syncconfCalls(t); calls != 0 {
+		t.Errorf("health endpoint must not synchronize config: got %d syncconf calls", calls)
 	}
 }
 

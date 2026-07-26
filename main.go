@@ -275,6 +275,7 @@ func newRouter() *gin.Engine {
 	router.POST("/api/users/delete-all", deleteAllUsersHandlerGin)
 
 	// WireGuard status route
+	router.GET("/api/health", wireGuardHealthHandlerGin)
 	router.GET("/api/status", wireGuardStatusHandlerGin)
 	router.POST("/api/start", wireGuardStartHandlerGin)
 	router.POST("/api/stop", wireGuardStopHandlerGin)
@@ -1589,6 +1590,20 @@ func clientConfigExists(clientName string) bool {
 	simpleConfigPath := filepath.Join(WIREGUARD_CLIENTS, clientName+".conf")
 	
 	return fileExists(standardConfigPath) || fileExists(alternativeConfigPath) || fileExists(simpleConfigPath)
+}
+
+// WireGuard health handler - returns only whether the VPN interface is up.
+// Keep this path side-effect free and independent from the detailed status
+// endpoint, which synchronizes clients and collects peer/system diagnostics.
+func wireGuardHealthHandlerGin(c *gin.Context) {
+	statusSuccess, _ := executeCommand(wgCmd, "show", wgParams.ServerWGNIC)
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]bool{
+			"running": statusSuccess == "success",
+		},
+	})
 }
 
 // WireGuard status handler - shows current status of the WireGuard server

@@ -134,6 +134,12 @@ All endpoints require authentication with the API token in the request header: `
 
 Returns detailed information about the WireGuard server status, including connected peers, transfer statistics, and configuration details.
 
+### Get Lightweight Health
+
+**GET /api/health**
+
+Returns only whether the WireGuard/AmneziaWG interface is running. This endpoint does not synchronize clients or collect peer, system, or configuration details.
+
 ### List Clients
 
 **GET /api/users**
@@ -183,4 +189,4 @@ Request body:
 
 ## License
 
-MIT 
+MIT

@@ -312,6 +312,36 @@ paths:
         '401':
           description: Unauthorized - Missing or invalid API token
 
+  /api/health:
+    get:
+      summary: Get lightweight WireGuard health
+      description: Returns only whether the WireGuard/AmneziaWG interface is running.
+      operationId: getWireGuardHealth
+      responses:
+        '200':
+          description: Lightweight WireGuard health state
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - success
+                  - data
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    required:
+                      - running
+                    properties:
+                      running:
+                        type: boolean
+                        example: true
+        '404':
+          description: Unauthorized - Missing or invalid API token
+
   /api/wireguard/start:
     post:
       summary: Start the WireGuard service
