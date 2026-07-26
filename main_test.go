@@ -76,12 +76,14 @@ PrivateKey = server-private-key
 	oldConfigFile, oldClientsDir := WG_CONFIG_FILE, WIREGUARD_CLIENTS
 	oldWGCmd, oldWGQuickCmd := wgCmd, wgQuickCmd
 	oldParams, oldToken := wgParams, API_TOKEN
+	oldUseUDP443Endpoint := USE_UDP_443_ENDPOINT
 
 	WG_CONFIG_FILE = configFile
 	WIREGUARD_CLIENTS = clientsDir
 	wgCmd = script
 	wgQuickCmd = script
 	API_TOKEN = "test-token"
+	USE_UDP_443_ENDPOINT = false
 	wgParams = WGParams{
 		ServerPubIP:   "203.0.113.10",
 		ServerWGNIC:   "wg0",
@@ -99,6 +101,7 @@ PrivateKey = server-private-key
 		WG_CONFIG_FILE, WIREGUARD_CLIENTS = oldConfigFile, oldClientsDir
 		wgCmd, wgQuickCmd = oldWGCmd, oldWGQuickCmd
 		wgParams, API_TOKEN = oldParams, oldToken
+		USE_UDP_443_ENDPOINT = oldUseUDP443Endpoint
 	})
 
 	// Use the production router so tests exercise the exact routing + middleware
@@ -258,6 +261,9 @@ func TestSingleAddUser(t *testing.T) {
 	if !strings.Contains(resp.Data.Config, "PersistentKeepalive = 25") {
 		t.Error("client config missing PersistentKeepalive")
 	}
+	if !strings.Contains(resp.Data.Config, "Endpoint = 203.0.113.10:51820") {
+		t.Error("default client endpoint should use SERVER_PORT")
+	}
 
 	if !strings.Contains(env.configContent(t), "### Client alice") {
 		t.Error("server config missing peer entry for alice")
@@ -277,6 +283,36 @@ func TestSingleAddUser(t *testing.T) {
 	}
 	if calls := env.syncconfCalls(t); calls != 1 {
 		t.Errorf("duplicate add must not sync again: got %d syncconf calls, want 1", calls)
+	}
+}
+
+func TestSingleAddUserUsesUDP443WhenEnabled(t *testing.T) {
+	env := setupTestEnv(t)
+	USE_UDP_443_ENDPOINT = true
+
+	recorder := env.authedRequest(t, http.MethodPost, "/api/users/add", AddUserRequest{Name: "udp443"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", recorder.Code, recorder.Body.String())
+	}
+
+	var resp struct {
+		Success bool   `json:"success"`
+		Data    Client `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	if !strings.Contains(resp.Data.Config, "Endpoint = 203.0.113.10:443") {
+		t.Error("enabled UDP 443 mode should generate a 443 client endpoint")
+	}
+	if strings.Contains(resp.Data.Config, "Endpoint = 203.0.113.10:51820") {
+		t.Error("enabled UDP 443 mode must not generate SERVER_PORT as the client endpoint")
+	}
+	if !strings.Contains(env.configContent(t), "ListenPort = 51820") {
+		t.Error("enabling UDP 443 endpoint mode must not change the WireGuard listener")
 	}
 }
 

@@ -26,6 +26,9 @@ var (
 	WG_PARAMS_FILE    = getEnv("WG_PARAMS_FILE", "/etc/wireguard/params")
 	WIREGUARD_CLIENTS = getEnv("WIREGUARD_CLIENTS", "/home/wireguard/users")
 	DEBUG_MODE        = getEnv("DEBUG_MODE", "false") == "true"
+	// This changes only the endpoint port written to newly generated client configs.
+	// SERVER_PORT and the WireGuard/AmneziaWG listener remain unchanged.
+	USE_UDP_443_ENDPOINT = strings.EqualFold(getEnv("USE_UDP_443_ENDPOINT", "false"), "true")
 	
 	// Backend detection
 	backendType string // "wireguard" or "amneziawg"
@@ -207,6 +210,7 @@ func loadEnv() {
 	API_TOKEN = getEnv("API_TOKEN", "your-secure-api-token")
 	WIREGUARD_CLIENTS = getEnv("WIREGUARD_CLIENTS", "/home/wireguard/users")
 	DEBUG_MODE = getEnv("DEBUG_MODE", "false") == "true"
+	USE_UDP_443_ENDPOINT = strings.EqualFold(getEnv("USE_UDP_443_ENDPOINT", "false"), "true")
 	
 	// Detect backend type (this will set WG_CONFIG_FILE and WG_PARAMS_FILE)
 	detectBackend()
@@ -236,6 +240,7 @@ func main() {
 	log.Printf("VPN params file: %s", WG_PARAMS_FILE)
 	log.Printf("Clients directory: %s", WIREGUARD_CLIENTS)
 	log.Printf("Debug mode: %v", DEBUG_MODE)
+	log.Printf("UDP 443 client endpoint mode: %v", USE_UDP_443_ENDPOINT)
 	
 	// Load VPN params
 	err := loadWGParams()
@@ -1199,7 +1204,11 @@ func createWireGuardClientLocked(name, ipv4, ipv6 string, keys clientKeys) (stri
 		endpoint = "[" + endpoint + "]"
 	}
 	
-	endpoint = endpoint + ":" + wgParams.ServerPort
+	endpointPort := wgParams.ServerPort
+	if USE_UDP_443_ENDPOINT {
+		endpointPort = "443"
+	}
+	endpoint = endpoint + ":" + endpointPort
 
 	// Format Address line based on provided IP addresses
 	var addressParts []string
