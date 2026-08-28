@@ -30,37 +30,37 @@ var (
 	// This changes only the endpoint port written to newly generated client configs.
 	// SERVER_PORT and the WireGuard/AmneziaWG listener remain unchanged.
 	USE_UDP_443_ENDPOINT = strings.EqualFold(getEnv("USE_UDP_443_ENDPOINT", "false"), "true")
-	
+
 	// Backend detection
-	backendType string // "wireguard" or "amneziawg"
-	wgCmd       string // "wg" or "awg"
-	wgQuickCmd  string // "wg-quick" or "awg-quick"
+	backendType     string // "wireguard" or "amneziawg"
+	wgCmd           string // "wg" or "awg"
+	wgQuickCmd      string // "wg-quick" or "awg-quick"
 	wgServicePrefix string // "wg-quick@" or "awg-quick@"
 )
 
 // WireGuard/AmneziaWG parameters loaded from params file
 type WGParams struct {
-	ServerPubIP      string
-	ServerPubNIC     string
-	ServerWGNIC      string
-	ServerWGIPv4     string
-	ServerWGIPv6     string
-	ServerPort       string
-	ServerPrivKey    string
-	ServerPubKey     string
-	ClientDNS1       string
-	ClientDNS2       string
-	AllowedIPs       string
+	ServerPubIP   string
+	ServerPubNIC  string
+	ServerWGNIC   string
+	ServerWGIPv4  string
+	ServerWGIPv6  string
+	ServerPort    string
+	ServerPrivKey string
+	ServerPubKey  string
+	ClientDNS1    string
+	ClientDNS2    string
+	AllowedIPs    string
 	// AmneziaWG specific parameters
-	ServerAWGJC      string
-	ServerAWGJMin    string
-	ServerAWGJMax    string
-	ServerAWGS1      string
-	ServerAWGS2      string
-	ServerAWGH1      string
-	ServerAWGH2      string
-	ServerAWGH3      string
-	ServerAWGH4      string
+	ServerAWGJC   string
+	ServerAWGJMin string
+	ServerAWGJMax string
+	ServerAWGS1   string
+	ServerAWGS2   string
+	ServerAWGH1   string
+	ServerAWGH2   string
+	ServerAWGH3   string
+	ServerAWGH4   string
 }
 
 // Response structs
@@ -79,9 +79,9 @@ type Client struct {
 
 // Add user request
 type AddUserRequest struct {
-	Name   string `json:"name"`
-	IPV4   string `json:"ipv4,omitempty"`
-	IPV6   string `json:"ipv6,omitempty"`
+	Name string `json:"name"`
+	IPV4 string `json:"ipv4,omitempty"`
+	IPV6 string `json:"ipv6,omitempty"`
 }
 
 // Bulk add users request
@@ -132,15 +132,13 @@ func authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.GetHeader("key")
 		if token == "" {
-			c.JSON(http.StatusNotFound, APIResponse{
-			})
+			c.JSON(http.StatusNotFound, APIResponse{})
 			c.Abort()
 			return
 		}
 
 		if token != API_TOKEN {
-			c.JSON(http.StatusNotFound, APIResponse{
-			})
+			c.JSON(http.StatusNotFound, APIResponse{})
 			c.Abort()
 			return
 		}
@@ -189,7 +187,7 @@ func detectBackend() {
 			return
 		}
 	}
-	
+
 	// Default to WireGuard
 	backendType = "wireguard"
 	wgCmd = "wg"
@@ -205,17 +203,17 @@ func loadEnv() {
 	if err != nil {
 		log.Printf("No .env file found, using default configuration")
 	}
-	
+
 	// Reload configuration vars after reading .env
 	API_PORT = getEnv("API_PORT", "8080")
 	API_TOKEN = getEnv("API_TOKEN", "your-secure-api-token")
 	WIREGUARD_CLIENTS = getEnv("WIREGUARD_CLIENTS", "/home/wireguard/users")
 	DEBUG_MODE = getEnv("DEBUG_MODE", "false") == "true"
 	USE_UDP_443_ENDPOINT = strings.EqualFold(getEnv("USE_UDP_443_ENDPOINT", "false"), "true")
-	
+
 	// Detect backend type (this will set WG_CONFIG_FILE and WG_PARAMS_FILE)
 	detectBackend()
-	
+
 	// Allow environment variables to override detected paths ONLY if backend is WireGuard
 	// For AmneziaWG, always use detected paths to ensure correctness
 	if backendType == "wireguard" {
@@ -232,7 +230,7 @@ func loadEnv() {
 func main() {
 	// Load environment variables
 	loadEnv()
-	
+
 	// Log configuration
 	log.Printf("Starting WireGuard API server...")
 	log.Printf("Backend type: %s", backendType)
@@ -242,7 +240,7 @@ func main() {
 	log.Printf("Clients directory: %s", WIREGUARD_CLIENTS)
 	log.Printf("Debug mode: %v", DEBUG_MODE)
 	log.Printf("UDP 443 client endpoint mode: %v", USE_UDP_443_ENDPOINT)
-	
+
 	// Load VPN params
 	err := loadWGParams()
 	if err != nil {
@@ -253,7 +251,7 @@ func main() {
 	if !DEBUG_MODE {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	
+
 	// Start server
 	router := newRouter()
 	log.Printf("WireGuard API server running on port %s", API_PORT)
@@ -296,7 +294,7 @@ func loadWGParams() error {
 
 	scanner := bufio.NewScanner(file)
 	params := make(map[string]string)
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		parts := strings.SplitN(line, "=", 2)
@@ -314,12 +312,12 @@ func loadWGParams() error {
 	if serverNIC == "" {
 		serverNIC = params["SERVER_AWG_NIC"] // AmneziaWG uses SERVER_AWG_NIC
 	}
-	
+
 	serverIPv4 := params["SERVER_WG_IPV4"]
 	if serverIPv4 == "" {
 		serverIPv4 = params["SERVER_AWG_IPV4"] // AmneziaWG uses SERVER_AWG_IPV4
 	}
-	
+
 	serverIPv6 := params["SERVER_WG_IPV6"]
 	if serverIPv6 == "" {
 		serverIPv6 = params["SERVER_AWG_IPV6"] // AmneziaWG uses SERVER_AWG_IPV6
@@ -359,9 +357,9 @@ func loadWGParams() error {
 	}
 
 	// Ensure all required fields are present
-	if wgParams.ServerPubIP == "" || wgParams.ServerWGNIC == "" || 
-	   wgParams.ServerPubKey == "" || wgParams.ServerPort == "" || 
-	   wgParams.ServerWGIPv4 == "" {
+	if wgParams.ServerPubIP == "" || wgParams.ServerWGNIC == "" ||
+		wgParams.ServerPubKey == "" || wgParams.ServerPort == "" ||
+		wgParams.ServerWGIPv4 == "" {
 		return fmt.Errorf("required VPN parameters missing")
 	}
 
@@ -374,7 +372,7 @@ func listUsersHandlerGin(c *gin.Context) {
 	if err := syncDeletedClientsWithConfig(); err != nil {
 		log.Printf("Error syncing deleted clients: %v", err)
 	}
-	
+
 	clients, err := listWireGuardClients()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, APIResponse{
@@ -661,7 +659,7 @@ func deleteAllUsersHandlerGin(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	// If no clients found, return success
 	if len(clients) == 0 {
 		c.JSON(http.StatusOK, APIResponse{
@@ -670,22 +668,22 @@ func deleteAllUsersHandlerGin(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	// Create a copy of client data for the response before we start deleting
 	clientsData := make([]Client, len(clients))
 	copy(clientsData, clients)
-	
+
 	// Now acquire the lock for the actual deletion operations
 	wgConfigMutex.Lock()
 	defer wgConfigMutex.Unlock()
-	
+
 	// Step 2: Delete all client config files from directory
 	deletedFiles, filesErr := removeAllClientFiles()
 	if filesErr != nil {
 		log.Printf("Warning: Error while deleting client files: %v", filesErr)
 		// Continue with next step - we'll try to remove from config anyway
 	}
-	
+
 	// Step 3: Remove all client entries from WireGuard config
 	configErr := removeAllClientsFromConfig()
 	if configErr != nil {
@@ -694,12 +692,12 @@ func deleteAllUsersHandlerGin(c *gin.Context) {
 			Message: fmt.Sprintf("Failed to remove clients from config: %v", configErr),
 			Data: map[string]interface{}{
 				"deleted_files": deletedFiles,
-				"file_error": filesErr != nil,
+				"file_error":    filesErr != nil,
 			},
 		})
 		return
 	}
-	
+
 	// Step 4: Sync changes with WireGuard to disconnect clients
 	syncErr := syncWireGuardConf()
 	if syncErr != nil {
@@ -707,20 +705,20 @@ func deleteAllUsersHandlerGin(c *gin.Context) {
 			Success: false,
 			Message: fmt.Sprintf("Failed to sync WireGuard config: %v", syncErr),
 			Data: map[string]interface{}{
-				"deleted_files": deletedFiles,
+				"deleted_files":  deletedFiles,
 				"config_updated": true,
 			},
 		})
 		return
 	}
-	
+
 	// Success response
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("Successfully deleted %d client(s)", len(clients)),
 		Data: map[string]interface{}{
 			"deleted_count": len(clients),
-			"clients": clientsData,
+			"clients":       clientsData,
 			"files_deleted": deletedFiles,
 		},
 	})
@@ -730,25 +728,25 @@ func deleteAllUsersHandlerGin(c *gin.Context) {
 // Returns a list of deleted files and any error encountered
 func removeAllClientFiles() ([]string, error) {
 	deletedFiles := []string{}
-	
+
 	// Check if directory exists
 	if _, err := os.Stat(WIREGUARD_CLIENTS); os.IsNotExist(err) {
 		return deletedFiles, nil // Directory doesn't exist, nothing to delete
 	}
-	
+
 	// Read all files in the directory
 	files, err := os.ReadDir(WIREGUARD_CLIENTS)
 	if err != nil {
 		return deletedFiles, fmt.Errorf("failed to read client directory: %v", err)
 	}
-	
+
 	// Delete all .conf files
 	var lastErr error
 	for _, file := range files {
 		if file.IsDir() {
 			continue // Skip directories
 		}
-		
+
 		if filepath.Ext(file.Name()) == ".conf" {
 			filePath := filepath.Join(WIREGUARD_CLIENTS, file.Name())
 			if err := os.Remove(filePath); err != nil {
@@ -762,7 +760,7 @@ func removeAllClientFiles() ([]string, error) {
 			}
 		}
 	}
-	
+
 	return deletedFiles, lastErr
 }
 
@@ -773,28 +771,28 @@ func removeAllClientsFromConfig() error {
 	if err != nil {
 		return fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
-	
+
 	// Find the server configuration (everything before the first client)
 	clientMarkerIndex := strings.Index(string(content), "### Client ")
 	if clientMarkerIndex == -1 {
 		// No clients found, nothing to remove
 		return nil
 	}
-	
+
 	// Extract server config (everything before the first client marker)
 	serverConfig := string(content[:clientMarkerIndex])
-	
+
 	// Make sure the config ends with a newline
 	if !strings.HasSuffix(serverConfig, "\n") {
 		serverConfig += "\n"
 	}
-	
+
 	// Write the updated config back to the file
 	err = os.WriteFile(WG_CONFIG_FILE, []byte(serverConfig), 0600)
 	if err != nil {
 		return fmt.Errorf("failed to update WireGuard config: %v", err)
 	}
-	
+
 	return nil
 }
 
@@ -862,20 +860,20 @@ func getNextAvailableIPv6() (string, error) {
 	if len(parts) != 2 {
 		return "", fmt.Errorf("invalid server IPv6 address format")
 	}
-	
+
 	baseIP := parts[0]
-	
+
 	// Get existing IPs from the config file
 	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return "", fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
-	
+
 	// Find all IPv6 addresses in the config
 	ipv6Pattern := regexp.QuoteMeta(baseIP) + `::([\da-fA-F]+)`
 	ipv6Regex := regexp.MustCompile(ipv6Pattern)
 	matches := ipv6Regex.FindAllStringSubmatch(string(content), -1)
-	
+
 	// Collect all used last parts
 	usedParts := make(map[int]bool)
 	for _, match := range matches {
@@ -885,7 +883,7 @@ func getNextAvailableIPv6() (string, error) {
 			usedParts[part] = true
 		}
 	}
-	
+
 	// Find the first available part starting from 2, widened from 254 to 0xfffe
 	// so IPv6 doesn't become the new ceiling once IPv4 is on a /16.
 	//
@@ -914,7 +912,7 @@ func clientExists(name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
-	
+
 	// (?m) makes ^/$ match per line; without it `$` only matches end-of-text,
 	// so these checks silently never fired and existence relied solely on the
 	// client config files below.
@@ -945,28 +943,28 @@ func clientExists(name string) (bool, error) {
 	if dynamicPrefixedClientRegex.Match(content) {
 		return true, nil
 	}
-	
+
 	// Check all possible client config file patterns
 	standardConfigPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+name+".conf")
 	if fileExists(standardConfigPath) {
 		return true, nil
 	}
-	
+
 	alternativeConfigPath := filepath.Join(WIREGUARD_CLIENTS, "wg0-client-"+name+".conf")
 	if fileExists(alternativeConfigPath) {
 		return true, nil
 	}
-	
+
 	awgConfigPath := filepath.Join(WIREGUARD_CLIENTS, "awg0-client-"+name+".conf")
 	if fileExists(awgConfigPath) {
 		return true, nil
 	}
-	
+
 	simpleConfigPath := filepath.Join(WIREGUARD_CLIENTS, name+".conf")
 	if fileExists(simpleConfigPath) {
 		return true, nil
 	}
-	
+
 	return false, nil
 }
 
@@ -974,7 +972,7 @@ func clientExists(name string) (bool, error) {
 func listWireGuardClients() ([]Client, error) {
 	// Create map to hold all clients (using map to avoid duplicates)
 	clientMap := make(map[string]Client)
-	
+
 	// First, scan the client configuration directory
 	err := os.MkdirAll(WIREGUARD_CLIENTS, 0700)
 	if err != nil {
@@ -997,10 +995,10 @@ func listWireGuardClients() ([]Client, error) {
 		if file.IsDir() {
 			continue // Skip directories
 		}
-		
+
 		fileName := file.Name()
 		clientName := ""
-		
+
 		// Extract client name based on filename pattern
 		if matches := wgPrefixRegex.FindStringSubmatch(fileName); len(matches) > 1 {
 			// Format: {interface}-client-{name}.conf
@@ -1021,7 +1019,7 @@ func listWireGuardClients() ([]Client, error) {
 			}
 			continue
 		}
-		
+
 		// Read the client configuration
 		configPath := filepath.Join(WIREGUARD_CLIENTS, fileName)
 		configData, err := os.ReadFile(configPath)
@@ -1029,13 +1027,13 @@ func listWireGuardClients() ([]Client, error) {
 			log.Printf("Warning: Failed to read file %s: %v", configPath, err)
 			continue
 		}
-		
+
 		// Create basic client info
 		client := Client{
 			Name:   clientName,
 			Config: string(configData),
 		}
-		
+
 		// Try to extract IP addresses if this looks like a WireGuard config
 		configStr := string(configData)
 		if strings.Contains(configStr, "[Interface]") {
@@ -1046,7 +1044,7 @@ func listWireGuardClients() ([]Client, error) {
 				if strings.HasPrefix(line, "Address = ") {
 					addressLine := strings.TrimPrefix(line, "Address = ")
 					addresses := strings.Split(addressLine, ",")
-					
+
 					// Extract IPv4 address
 					if len(addresses) > 0 {
 						ipv4WithPrefix := addresses[0]
@@ -1054,7 +1052,7 @@ func listWireGuardClients() ([]Client, error) {
 							client.IPV4 = strings.Split(ipv4WithPrefix, "/")[0]
 						}
 					}
-					
+
 					// Extract IPv6 address if present
 					if len(addresses) > 1 {
 						ipv6WithPrefix := addresses[1]
@@ -1062,22 +1060,22 @@ func listWireGuardClients() ([]Client, error) {
 							client.IPV6 = strings.Split(ipv6WithPrefix, "/")[0]
 						}
 					}
-					
+
 					break // Found what we need
 				}
 			}
 		}
-		
+
 		// Store in our map
 		clientMap[clientName] = client
 	}
-	
+
 	// Convert map to slice for return
 	clients := make([]Client, 0, len(clientMap))
 	for _, client := range clientMap {
 		clients = append(clients, client)
 	}
-	
+
 	return clients, nil
 }
 
@@ -1201,12 +1199,12 @@ func createWireGuardClientLocked(name, ipv4, ipv6 string, keys clientKeys) (stri
 
 	// Create client configuration
 	endpoint := wgParams.ServerPubIP
-	
+
 	// If IPv6, add brackets if missing
 	if strings.Contains(endpoint, ":") && !strings.Contains(endpoint, "[") {
 		endpoint = "[" + endpoint + "]"
 	}
-	
+
 	endpointPort := wgParams.ServerPort
 	if USE_UDP_443_ENDPOINT {
 		endpointPort = "443"
@@ -1222,13 +1220,13 @@ func createWireGuardClientLocked(name, ipv4, ipv6 string, keys clientKeys) (stri
 		addressParts = append(addressParts, ipv6+"/128")
 	}
 	addressLine := fmt.Sprintf("Address = %s", strings.Join(addressParts, ","))
-	
+
 	// Build client config - include AmneziaWG parameters if backend is AmneziaWG
 	var interfaceLines []string
 	interfaceLines = append(interfaceLines, fmt.Sprintf("PrivateKey = %s", keys.privateKey))
 	interfaceLines = append(interfaceLines, addressLine)
 	interfaceLines = append(interfaceLines, fmt.Sprintf("DNS = %s,%s", wgParams.ClientDNS1, wgParams.ClientDNS2))
-	
+
 	// Add AmneziaWG specific parameters if backend is AmneziaWG
 	if backendType == "amneziawg" {
 		if wgParams.ServerAWGJC != "" {
@@ -1259,7 +1257,7 @@ func createWireGuardClientLocked(name, ipv4, ipv6 string, keys clientKeys) (stri
 			interfaceLines = append(interfaceLines, fmt.Sprintf("H4 = %s", wgParams.ServerAWGH4))
 		}
 	}
-	
+
 	// PersistentKeepalive keeps the client's NAT mapping alive while the
 	// phone is locked and idle; without it recovery after unlock is slow.
 	clientConfig := fmt.Sprintf(`[Interface]
@@ -1272,7 +1270,7 @@ Endpoint = %s
 AllowedIPs = %s
 PersistentKeepalive = 25
 `, strings.Join(interfaceLines, "\n"),
-	   wgParams.ServerPubKey, keys.preSharedKey, endpoint, wgParams.AllowedIPs)
+		wgParams.ServerPubKey, keys.preSharedKey, endpoint, wgParams.AllowedIPs)
 
 	// Write client config to file
 	err = os.WriteFile(configPath, []byte(clientConfig), 0600)
@@ -1320,7 +1318,7 @@ AllowedIPs = %s
 func deleteWireGuardClient(name string) error {
 	wgConfigMutex.Lock()
 	defer wgConfigMutex.Unlock()
-	
+
 	// Read the server config
 	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
@@ -1331,12 +1329,12 @@ func deleteWireGuardClient(name string) error {
 	// 1. "### Client {name}" (exact name match)
 	// 2. "### Client wg0-client-{name}" (prefixed name match)
 	// 3. "### Client {interface}-client-{name}" (dynamic interface prefixed match)
-	
+
 	// Check for exact name match first
 	exactClientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(name) + `$.*?^$`)
 	if exactClientRegex.Match(content) {
 		newContent := exactClientRegex.ReplaceAll(content, []byte(""))
-		
+
 		// Write back the updated config
 		err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
 		if err != nil {
@@ -1346,15 +1344,15 @@ func deleteWireGuardClient(name string) error {
 		// Check for prefixed name matches
 		prefixedName := "wg0-client-" + name
 		prefixedClientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(prefixedName) + `$.*?^$`)
-		
+
 		// Check for awg0 prefixed name matches
 		awgPrefixedName := "awg0-client-" + name
 		awgPrefixedClientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(awgPrefixedName) + `$.*?^$`)
-		
+
 		// Also try with dynamic interface name prefix
 		dynamicPrefixedName := wgParams.ServerWGNIC + "-client-" + name
 		dynamicPrefixedClientRegex := regexp.MustCompile(`(?ms)^### Client ` + regexp.QuoteMeta(dynamicPrefixedName) + `$.*?^$`)
-		
+
 		if prefixedClientRegex.Match(content) {
 			newContent := prefixedClientRegex.ReplaceAll(content, []byte(""))
 			err = os.WriteFile(WG_CONFIG_FILE, newContent, 0600)
@@ -1383,11 +1381,11 @@ func deleteWireGuardClient(name string) error {
 	alternativeConfigPath := filepath.Join(WIREGUARD_CLIENTS, "wg0-client-"+name+".conf")
 	awgConfigPath := filepath.Join(WIREGUARD_CLIENTS, "awg0-client-"+name+".conf")
 	simpleConfigPath := filepath.Join(WIREGUARD_CLIENTS, name+".conf")
-	
+
 	// Try removing all possible config file patterns
 	configPaths := []string{standardConfigPath, alternativeConfigPath, awgConfigPath, simpleConfigPath}
 	clientRemoved := false
-	
+
 	for _, configPath := range configPaths {
 		if fileExists(configPath) {
 			if err := os.Remove(configPath); err != nil {
@@ -1399,7 +1397,7 @@ func deleteWireGuardClient(name string) error {
 			}
 		}
 	}
-	
+
 	if !clientRemoved && DEBUG_MODE {
 		log.Printf("Warning: Could not find any config files for client %s", name)
 	}
@@ -1417,12 +1415,12 @@ func generatePrivateKey() (string, error) {
 	cmd := exec.Command(wgCmd, "genkey")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	
+
 	err := cmd.Run()
 	if err != nil {
 		return "", err
 	}
-	
+
 	return strings.TrimSpace(stdout.String()), nil
 }
 
@@ -1433,12 +1431,12 @@ func derivePublicKey(privateKey string) (string, error) {
 	cmd.Stdout = &stdout
 	stdin := bytes.NewBufferString(privateKey)
 	cmd.Stdin = stdin
-	
+
 	err := cmd.Run()
 	if err != nil {
 		return "", err
 	}
-	
+
 	return strings.TrimSpace(stdout.String()), nil
 }
 
@@ -1447,12 +1445,12 @@ func generatePSK() (string, error) {
 	cmd := exec.Command(wgCmd, "genpsk")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	
+
 	err := cmd.Run()
 	if err != nil {
 		return "", err
 	}
-	
+
 	return strings.TrimSpace(stdout.String()), nil
 }
 
@@ -1463,7 +1461,7 @@ func syncWireGuardConf() error {
 	var stripError bytes.Buffer
 	stripCmd.Stdout = &stripOutput
 	stripCmd.Stderr = &stripError
-	
+
 	err := stripCmd.Run()
 	if err != nil {
 		if DEBUG_MODE {
@@ -1472,12 +1470,12 @@ func syncWireGuardConf() error {
 		}
 		return fmt.Errorf("%s strip command failed: %v, stderr: %s", wgQuickCmd, err, stripError.String())
 	}
-	
+
 	syncCmd := exec.Command(wgCmd, "syncconf", wgParams.ServerWGNIC, "/dev/stdin")
 	syncCmd.Stdin = &stripOutput
 	var syncError bytes.Buffer
 	syncCmd.Stderr = &syncError
-	
+
 	err = syncCmd.Run()
 	if err != nil {
 		if DEBUG_MODE {
@@ -1486,7 +1484,7 @@ func syncWireGuardConf() error {
 		}
 		return fmt.Errorf("%s syncconf command failed: %v, stderr: %s", wgCmd, err, syncError.String())
 	}
-	
+
 	return nil
 }
 
@@ -1494,31 +1492,31 @@ func syncWireGuardConf() error {
 func syncDeletedClientsWithConfig() error {
 	wgConfigMutex.Lock()
 	defer wgConfigMutex.Unlock()
-	
+
 	// Read the WireGuard config file
 	content, err := os.ReadFile(WG_CONFIG_FILE)
 	if err != nil {
 		return fmt.Errorf("failed to read WireGuard config: %v", err)
 	}
-	
+
 	// Extract client names from the config file
 	clientSectionRegex := regexp.MustCompile(`(?m)^### Client (.+)$`)
 	matches := clientSectionRegex.FindAllSubmatch(content, -1)
-	
+
 	configChanged := false
-	
+
 	// For each client in WireGuard config, check if its config file exists
 	for _, match := range matches {
 		if len(match) < 2 {
 			continue
 		}
-		
+
 		clientName := string(match[1])
-		
+
 		// Check if config file exists for this client using all possible naming patterns
 		if !clientConfigExists(clientName) {
 			log.Printf("Client %s config file is missing, removing from WireGuard config", clientName)
-			
+
 			// Remove client from WireGuard config file directly without calling deleteWireGuardClient
 			// to avoid potential circular dependencies
 			newContent, removed := removeClientFromConfig(content, clientName)
@@ -1533,14 +1531,14 @@ func syncDeletedClientsWithConfig() error {
 			}
 		}
 	}
-	
+
 	// If we made changes to the config, apply them
 	if configChanged {
 		if err := syncWireGuardConf(); err != nil {
 			return fmt.Errorf("failed to sync WireGuard config: %v", err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -1549,15 +1547,15 @@ func removeClientFromConfig(content []byte, clientName string) ([]byte, bool) {
 	// Try all possible client name formats in the config
 	patterns := []string{
 		`(?ms)^### Client ` + regexp.QuoteMeta(clientName) + `$.*?^$`,
-		`(?ms)^### Client ` + regexp.QuoteMeta("wg0-client-" + clientName) + `$.*?^$`,
-		`(?ms)^### Client ` + regexp.QuoteMeta("awg0-client-" + clientName) + `$.*?^$`,
-		`(?ms)^### Client ` + regexp.QuoteMeta(wgParams.ServerWGNIC + "-client-" + clientName) + `$.*?^$`,
+		`(?ms)^### Client ` + regexp.QuoteMeta("wg0-client-"+clientName) + `$.*?^$`,
+		`(?ms)^### Client ` + regexp.QuoteMeta("awg0-client-"+clientName) + `$.*?^$`,
+		`(?ms)^### Client ` + regexp.QuoteMeta(wgParams.ServerWGNIC+"-client-"+clientName) + `$.*?^$`,
 	}
-	
+
 	originalSize := len(content)
 	var newContent []byte
 	removed := false
-	
+
 	for _, pattern := range patterns {
 		clientRegex := regexp.MustCompile(pattern)
 		if clientRegex.Match(content) {
@@ -1566,17 +1564,17 @@ func removeClientFromConfig(content []byte, clientName string) ([]byte, bool) {
 			break
 		}
 	}
-	
+
 	// If none of the patterns matched, return original content
 	if !removed {
 		return content, false
 	}
-	
+
 	// If the content changed, return the new content
 	if len(newContent) != originalSize {
 		return newContent, true
 	}
-	
+
 	return content, false
 }
 
@@ -1586,11 +1584,11 @@ func clientConfigExists(clientName string) bool {
 	if _, err := os.Stat(WIREGUARD_CLIENTS); os.IsNotExist(err) {
 		return false
 	}
-	
+
 	standardConfigPath := filepath.Join(WIREGUARD_CLIENTS, wgParams.ServerWGNIC+"-client-"+clientName+".conf")
 	alternativeConfigPath := filepath.Join(WIREGUARD_CLIENTS, "wg0-client-"+clientName+".conf")
 	simpleConfigPath := filepath.Join(WIREGUARD_CLIENTS, clientName+".conf")
-	
+
 	return fileExists(standardConfigPath) || fileExists(alternativeConfigPath) || fileExists(simpleConfigPath)
 }
 
@@ -1605,21 +1603,33 @@ func clientConfigExists(clientName string) bool {
 // count, and it counts real interface traffic rather than a sum of per-peer
 // counters that resets whenever a peer is re-added.
 func wireGuardStatsHandlerGin(c *gin.Context) {
-	nic := wgParams.ServerWGNIC
+	// Hosting providers meter the physical NIC, which on a VPN exit carries
+	// roughly twice the WireGuard tunnel (encrypted client side plus plaintext
+	// internet side). Report that interface so usage matches the invoice —
+	// reading the WG interface instead reports about half the billed traffic
+	// and lets over-quota nodes hide. Fall back to the WG interface only when
+	// SERVER_PUB_NIC is not configured.
+	billNIC := wgParams.ServerPubNIC
+	if billNIC == "" {
+		billNIC = defaultRouteNIC()
+	}
+	if billNIC == "" {
+		billNIC = wgParams.ServerWGNIC
+	}
 
-	rx, rxErr := readInterfaceCounter(nic, "rx_bytes")
-	tx, txErr := readInterfaceCounter(nic, "tx_bytes")
+	rx, rxErr := readInterfaceCounter(billNIC, "rx_bytes")
+	tx, txErr := readInterfaceCounter(billNIC, "tx_bytes")
 
 	if rxErr != nil || txErr != nil {
 		c.JSON(http.StatusOK, APIResponse{
 			Success: false,
-			Message: fmt.Sprintf("interface %s counters unavailable", nic),
+			Message: fmt.Sprintf("interface %s counters unavailable", billNIC),
 		})
 		return
 	}
 
 	peers := 0
-	if success, output := executeCommand(wgCmd, "show", nic, "peers"); success == "success" {
+	if success, output := executeCommand(wgCmd, "show", wgParams.ServerWGNIC, "peers"); success == "success" {
 		if trimmed := strings.TrimSpace(output); trimmed != "" {
 			peers = len(strings.Split(trimmed, "\n"))
 		}
@@ -1628,7 +1638,7 @@ func wireGuardStatsHandlerGin(c *gin.Context) {
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"interface": nic,
+			"interface": billNIC,
 			"rx_bytes":  rx,
 			"tx_bytes":  tx,
 			"peers":     peers,
@@ -1647,6 +1657,30 @@ func readInterfaceCounter(nic string, counter string) (uint64, error) {
 	}
 
 	return strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+}
+
+// defaultRouteNIC returns the interface carrying the IPv4 default route — the
+// NIC a hosting provider meters — or "" if it cannot be determined. Used as a
+// fallback when SERVER_PUB_NIC is absent from the params file, which is common
+// on older provisions and would otherwise leave billing measured on the WG
+// tunnel (about half the real traffic).
+func defaultRouteNIC() string {
+	raw, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(raw), "\n")
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		// Columns: Iface Destination Flags ... — an all-zero destination is
+		// the default route, and its Iface is the metered NIC.
+		if len(fields) >= 2 && fields[1] == "00000000" {
+			return fields[0]
+		}
+	}
+
+	return ""
 }
 
 // systemUptimeSeconds returns 0 rather than an error when unreadable - it is
@@ -1690,17 +1724,17 @@ func wireGuardStatusHandlerGin(c *gin.Context) {
 	if err := syncDeletedClientsWithConfig(); err != nil && DEBUG_MODE {
 		log.Printf("Error syncing deleted clients: %v", err)
 	}
-	
+
 	// Check VPN backend installed
 	wgInstalled, _ := executeCommand("which", wgCmd)
 	wgQuickInstalled, _ := executeCommand("which", wgQuickCmd)
-	
+
 	// Get VPN status
 	statusSuccess, statusOutput := executeCommand(wgCmd, "show", wgParams.ServerWGNIC)
-	
+
 	// Get VPN statistics (transfer, handshakes, etc.)
 	statsSuccess, statsOutput := executeCommand(wgCmd, "show", wgParams.ServerWGNIC, "dump")
-	
+
 	// Check if WireGuard interface is up - try ip command first, fall back to ifconfig
 	var interfaceOutput string
 	_, interfaceOutput = executeCommand("ip", "addr", "show", wgParams.ServerWGNIC)
@@ -1708,7 +1742,7 @@ func wireGuardStatusHandlerGin(c *gin.Context) {
 		// Try ifconfig as fallback
 		_, interfaceOutput = executeCommand("ifconfig", wgParams.ServerWGNIC)
 	}
-	
+
 	// Get listening port status - try ss command first, fall back to netstat
 	var portSuccess, portOutput string
 	portSuccess, portOutput = executeCommand("ss", "-lnp", fmt.Sprintf("sport = %s", wgParams.ServerPort))
@@ -1716,13 +1750,13 @@ func wireGuardStatusHandlerGin(c *gin.Context) {
 		// Try netstat as fallback
 		portSuccess, portOutput = executeCommand("netstat", "-lnp", fmt.Sprintf("| grep %s", wgParams.ServerPort))
 	}
-	
+
 	// Get system load
 	_, loadOutput := executeCommand("uptime")
-	
+
 	// Get server information
 	hostInfo, _ := executeCommand("uname", "-a")
-	
+
 	// Parse the statistics to get more structured data
 	var peers []map[string]interface{}
 	if statsSuccess == "success" && statsOutput != "" {
@@ -1731,7 +1765,7 @@ func wireGuardStatusHandlerGin(c *gin.Context) {
 			if line == "" {
 				continue
 			}
-			
+
 			fields := strings.Fields(line)
 			if len(fields) >= 5 {
 				peer := map[string]interface{}{
@@ -1741,17 +1775,17 @@ func wireGuardStatusHandlerGin(c *gin.Context) {
 					"allowed_ips":      fields[3],
 					"latest_handshake": fields[4],
 				}
-				
+
 				if len(fields) >= 7 {
 					peer["transfer_rx"] = fields[5]
 					peer["transfer_tx"] = fields[6]
 				}
-				
+
 				peers = append(peers, peer)
 			}
 		}
 	}
-	
+
 	// Find client names for each peer
 	clientPeers := make([]map[string]interface{}, 0, len(peers))
 	for _, peer := range peers {
@@ -1760,21 +1794,21 @@ func wireGuardStatusHandlerGin(c *gin.Context) {
 			clientPeers = append(clientPeers, peer)
 			continue
 		}
-		
+
 		// Try to find the client name from config file
 		clientName := findClientNameByPublicKey(publicKey)
 		peerWithName := make(map[string]interface{})
 		for k, v := range peer {
 			peerWithName[k] = v
 		}
-		
+
 		if clientName != "" {
 			peerWithName["client_name"] = clientName
 		}
-		
+
 		clientPeers = append(clientPeers, peerWithName)
 	}
-	
+
 	// Get kernel module and service status
 	var modulePattern string
 	if backendType == "amneziawg" {
@@ -1784,51 +1818,51 @@ func wireGuardStatusHandlerGin(c *gin.Context) {
 	}
 	_, moduleOutput := executeCommand("lsmod", fmt.Sprintf("| grep %s", modulePattern))
 	_, serviceOutput := executeCommand("systemctl", "status", wgServicePrefix+wgParams.ServerWGNIC)
-	
+
 	// Check WireGuard configuration files
 	configExists := fileExists(WG_CONFIG_FILE)
 	paramsExists := fileExists(WG_PARAMS_FILE)
-	
+
 	// Prepare the response data
 	statusData := map[string]interface{}{
-		"interface": wgParams.ServerWGNIC,
-		"running": statusSuccess == "success",
-		"status_output": statusOutput,
+		"interface":        wgParams.ServerWGNIC,
+		"running":          statusSuccess == "success",
+		"status_output":    statusOutput,
 		"interface_output": interfaceOutput,
 		"port_status": map[string]interface{}{
-			"port": wgParams.ServerPort,
+			"port":      wgParams.ServerPort,
 			"listening": portSuccess == "success" && strings.Contains(portOutput, wgParams.ServerPort),
-			"details": portOutput,
+			"details":   portOutput,
 		},
 		"system_load": loadOutput,
-		"peers": clientPeers,
+		"peers":       clientPeers,
 		"server_info": map[string]interface{}{
-			"public_ip": wgParams.ServerPubIP,
-			"port": wgParams.ServerPort,
+			"public_ip":  wgParams.ServerPubIP,
+			"port":       wgParams.ServerPort,
 			"public_key": wgParams.ServerPubKey,
-			"host_info": hostInfo,
+			"host_info":  hostInfo,
 		},
 		"system": map[string]interface{}{
-			"kernel_module": moduleOutput,
-			"service_status": serviceOutput,
-			"wg_installed": wgInstalled == "success",
+			"kernel_module":      moduleOutput,
+			"service_status":     serviceOutput,
+			"wg_installed":       wgInstalled == "success",
 			"wg_quick_installed": wgQuickInstalled == "success",
-			"config_exists": configExists,
-			"params_exists": paramsExists,
-			"config_file": WG_CONFIG_FILE,
-			"params_file": WG_PARAMS_FILE,
-			"clients_dir": WIREGUARD_CLIENTS, 
+			"config_exists":      configExists,
+			"params_exists":      paramsExists,
+			"config_file":        WG_CONFIG_FILE,
+			"params_file":        WG_PARAMS_FILE,
+			"clients_dir":        WIREGUARD_CLIENTS,
 		},
 	}
-	
+
 	// If in debug mode, include full configuration parameters
 	if DEBUG_MODE {
 		statusData["parameters"] = wgParams
 	}
-	
+
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
-		Data: statusData,
+		Data:    statusData,
 	})
 }
 
@@ -1842,11 +1876,11 @@ func findClientNameByPublicKey(publicKey string) string {
 		}
 		return ""
 	}
-	
+
 	// Find client sections with their public keys
 	clientSectionRegex := regexp.MustCompile(`(?m)^### Client (.+)$\s*\[Peer\]\s*PublicKey = (.+)$`)
 	matches := clientSectionRegex.FindAllSubmatch(content, -1)
-	
+
 	for _, match := range matches {
 		if len(match) >= 3 {
 			if string(match[2]) == publicKey {
@@ -1854,7 +1888,7 @@ func findClientNameByPublicKey(publicKey string) string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -1865,13 +1899,13 @@ func executeCommand(command string, args ...string) (string, string) {
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	
+
 	err := cmd.Run()
 	output := stdout.String()
 	if err != nil {
 		return "error", fmt.Sprintf("Error: %v\nStdout: %s\nStderr: %s", err, output, stderr.String())
 	}
-	
+
 	return "success", output
 }
 
@@ -1880,7 +1914,7 @@ func wireGuardStartHandlerGin(c *gin.Context) {
 	// Use systemctl to start the service
 	serviceName := wgServicePrefix + wgParams.ServerWGNIC
 	success, output := executeCommand("systemctl", "start", serviceName)
-	
+
 	if success != "success" {
 		c.JSON(http.StatusInternalServerError, APIResponse{
 			Success: false,
@@ -1889,7 +1923,7 @@ func wireGuardStartHandlerGin(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	// Check if the service is now running
 	success, _ = executeCommand("systemctl", "is-active", serviceName)
 	if success != "success" {
@@ -1900,7 +1934,7 @@ func wireGuardStartHandlerGin(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("%s service started successfully", backendType),
@@ -1912,7 +1946,7 @@ func wireGuardStopHandlerGin(c *gin.Context) {
 	// Use systemctl to stop the service
 	serviceName := wgServicePrefix + wgParams.ServerWGNIC
 	success, output := executeCommand("systemctl", "stop", serviceName)
-	
+
 	if success != "success" {
 		c.JSON(http.StatusInternalServerError, APIResponse{
 			Success: false,
@@ -1921,7 +1955,7 @@ func wireGuardStopHandlerGin(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("%s service stopped successfully", backendType),
@@ -1933,7 +1967,7 @@ func wireGuardRestartHandlerGin(c *gin.Context) {
 	// Use systemctl to restart the service
 	serviceName := wgServicePrefix + wgParams.ServerWGNIC
 	success, output := executeCommand("systemctl", "restart", serviceName)
-	
+
 	if success != "success" {
 		c.JSON(http.StatusInternalServerError, APIResponse{
 			Success: false,
@@ -1942,7 +1976,7 @@ func wireGuardRestartHandlerGin(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	// Check if the service is now running
 	success, _ = executeCommand("systemctl", "is-active", serviceName)
 	if success != "success" {
@@ -1953,7 +1987,7 @@ func wireGuardRestartHandlerGin(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("%s service restarted successfully", backendType),

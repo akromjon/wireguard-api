@@ -92,6 +92,7 @@ PrivateKey = server-private-key
 	USE_UDP_443_ENDPOINT = false
 	wgParams = WGParams{
 		ServerPubIP:   "203.0.113.10",
+		ServerPubNIC:  "wg0",
 		ServerWGNIC:   "wg0",
 		ServerWGIPv4:  "10.66.0.1",
 		ServerPort:    "51820",
